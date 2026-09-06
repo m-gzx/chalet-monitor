@@ -1,0 +1,6 @@
+.env
+state.json
+map.png
+monitor.log
+__pycache__/
+*.pyc
