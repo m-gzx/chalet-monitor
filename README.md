@@ -19,28 +19,24 @@ Puis ouvrir `.env` et remplir :
   https://myaccount.google.com/apppasswords
   (nécessite la validation en 2 étapes activée sur le compte)
 
-## 2. Étape importante : ajuster la requête Centris
+## 2. Étape importante : obtenir le flux RSS Centris
 
-Centris n'a pas d'API publique documentée. `monitor.py` contient une
-première tentative basée sur l'endpoint interne `/property/GetInscriptions`,
-mais **il faut la valider avant de l'automatiser** :
+`monitor.py` récupère les annonces via un **flux RSS d'une recherche
+sauvegardée** sur Centris (plus stable qu'une API interne non documentée,
+qui peut changer sans préavis) :
 
-1. Demander à Claude Code d'ouvrir centris.ca dans un navigateur
-   (ou le faire manuellement), faire une recherche "chalet à vendre" +
-   filtre "bord de l'eau" pour le secteur voulu.
-2. Ouvrir l'onglet Réseau (F12) du navigateur pendant la recherche.
-3. Repérer la requête envoyée (souvent en JSON, vers un endpoint
-   `/property/...`), et copier son format exact.
-4. Ajuster la fonction `search_centris_waterfront_cottages()` dans
-   `monitor.py` avec les bons noms de champs.
+1. Sur centris.ca, faire une recherche "chalet à vendre" + filtre
+   "bord de l'eau" pour le secteur voulu (autour de G3A2P8, rayon large —
+   le filtre par temps de route réel se fait ensuite dans le script).
+2. Sauvegarder la recherche, puis repérer l'option "Flux RSS" sur la page
+   de résultats (souvent une icône RSS ou dans le menu de partage/options
+   de la recherche sauvegardée) et copier son URL.
+3. Coller cette URL dans `.env` sous `CENTRIS_RSS_URL`.
 
-C'est le genre de tâche où Claude Code peut t'aider directement en
-inspectant les requêtes et en corrigeant le script.
-
-**Alternative plus simple si l'API Centris s'avère trop instable** :
-utiliser un flux RSS de recherche sauvegardée (Centris et DuProprio en
-offrent parfois) et adapter `monitor.py` pour parser du RSS au lieu de
-l'API — je peux réécrire cette partie si tu préfères cette avenue.
+Si Centris ne propose pas de flux RSS pour ce type de recherche : DuProprio
+en offre parfois pour ses recherches sauvegardées — une deuxième fonction
+similaire à `fetch_centris_rss_listings()` pourrait être ajoutée pour ce
+site.
 
 ## 3. Tester manuellement
 
@@ -70,18 +66,26 @@ lance `python monitor.py` dans le dossier du projet.
 ## 5. Ce que fait le script à chaque exécution
 
 1. Géocode G3A2P8.
-2. Cherche les chalets bord de l'eau dans un rayon large autour de ce point.
-3. Filtre par **temps de route réel** (≤ 2h) via OSRM, pas juste à vol d'oiseau.
-4. Compare avec `state.json` (annonces déjà vues).
-5. S'il y a du nouveau : génère une image de carte (`map.png`) et envoie
-   un courriel HTML avec la carte + un tableau de liens cliquables,
-   prix, et temps de route.
-6. Met à jour `state.json`.
+2. Lit le flux RSS Centris (`CENTRIS_RSS_URL`) pour la liste des chalets
+   bord de l'eau de la recherche sauvegardée.
+3. Compare avec `state.json` (annonces déjà vues) — ne garde que les
+   nouvelles.
+4. Géocode l'adresse de chaque nouvelle annonce, puis filtre par
+   **temps de route réel** (≤ 2h) via OSRM, pas juste à vol d'oiseau.
+5. S'il y a du nouveau après ce filtre : génère une image de carte
+   (`map.png`) et envoie un courriel HTML avec la carte + un tableau de
+   liens cliquables, prix, et temps de route.
+6. Met à jour `state.json` avec **toutes** les annonces vues dans le flux
+   (même celles à plus de 2h), pour ne pas les regéocoder inutilement
+   aux prochaines exécutions.
 
 ## Notes
 
 - Le service de temps de route utilisé (OSRM, serveur public de démo)
   est gratuit mais partagé — éviter les vérifications trop fréquentes
   (1x/jour est raisonnable).
+- Nominatim (géocodage) impose aussi une limite d'usage : le script
+  respecte 1 requête/seconde, mais éviter quand même les exécutions trop
+  fréquentes.
 - Pour ajouter DuProprio en plus de Centris, il faudrait une deuxième
-  fonction de recherche similaire à `search_centris_waterfront_cottages()`.
+  fonction de recherche similaire à `fetch_centris_rss_listings()`.

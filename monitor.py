@@ -4,12 +4,12 @@ Moniteur de chalets à vendre bord de l'eau, à 2h de route ou moins de G3A2P8.
 
 Flux :
   1. Géocode le point de départ (G3A2P8) avec Nominatim (OpenStreetMap).
-  2. Interroge Centris pour les chalets à vendre dans un large rayon autour
-     de ce point, avec le filtre "bord de l'eau".
-  3. Filtre les résultats par temps de route réel (via OSRM), pas juste
-     à vol d'oiseau.
-  4. Compare avec les annonces déjà vues (state.json) pour ne garder que
-     les nouvelles.
+  2. Récupère les chalets à vendre bord de l'eau via un flux RSS Centris
+     (recherche sauvegardée) — voir CENTRIS_RSS_URL dans .env.
+  3. Compare avec les annonces déjà vues (state.json) pour ne garder que
+     les nouvelles, puis géocode leur adresse.
+  4. Filtre les nouvelles annonces par temps de route réel (via OSRM), pas
+     juste à vol d'oiseau.
   5. Génère une carte (image statique) + un courriel HTML avec liens
      cliquables, et l'envoie.
 
@@ -19,8 +19,10 @@ Configuration : copier .env.example en .env et remplir les valeurs.
 
 import json
 import os
+import re
 import smtplib
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
@@ -36,7 +38,6 @@ load_dotenv()
 # --- CONFIGURATION ---
 ORIGIN_POSTAL_CODE = "G3A2P8"
 MAX_DRIVE_HOURS = 2.0
-SEARCH_RADIUS_KM = 180  # rayon large à vol d'oiseau, filtré ensuite par temps de route réel
 
 BASE_DIR = Path(__file__).parent
 STATE_FILE = BASE_DIR / "state.json"
@@ -47,6 +48,9 @@ EMAIL_TO = os.environ["EMAIL_TO"]
 EMAIL_APP_PASSWORD = os.environ["EMAIL_APP_PASSWORD"]
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+CENTRIS_RSS_URL = os.environ.get("CENTRIS_RSS_URL", "")
+
+PRICE_RE = re.compile(r"(\d[\d\s ]{2,})\s*\$")
 
 
 def geocode_postal_code(postal_code: str) -> tuple[float, float]:
@@ -82,45 +86,75 @@ def driving_time_minutes(origin: tuple[float, float], dest: tuple[float, float])
         return float("inf")
 
 
-def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: float) -> list[dict]:
+def parse_price(*texts: str) -> str | None:
+    """Extrait un prix (ex. '249 900') du premier texte où il apparaît, pour affichage."""
+    for text in texts:
+        match = PRICE_RE.search(text or "")
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def fetch_centris_rss_listings() -> list[dict]:
     """
-    Interroge l'endpoint de recherche interne de Centris.
+    Récupère les chalets à vendre bord de l'eau via un flux RSS Centris
+    (recherche sauvegardée), configuré dans CENTRIS_RSS_URL (.env).
 
-    IMPORTANT : Centris n'offre pas d'API publique documentée. Ce payload
-    reproduit l'appel utilisé par leur carte de recherche (endpoint
-    /property/GetInscriptions), reconstitué par inspection réseau. La
-    structure exacte des filtres (noms de champs, valeurs pour
-    "bord de l'eau", format des coordonnées) peut changer sans préavis.
+    Comment obtenir cette URL :
+    1. Sur centris.ca, faire une recherche "chalet à vendre" + filtre
+       "bord de l'eau" pour le secteur voulu, puis sauvegarder la recherche.
+    2. Chercher l'option "Flux RSS" sur la page de résultats (souvent une
+       icône RSS ou dans le menu de partage/options de la recherche
+       sauvegardée) et copier son URL.
+    3. Coller cette URL dans .env sous CENTRIS_RSS_URL.
 
-    -> À faire une première fois avec Claude Code : ouvrir centris.ca,
-    faire une recherche "chalet à vendre" + filtre "bord de l'eau" dans
-    le secteur voulu, puis inspecter l'onglet Réseau du navigateur pour
-    capturer la vraie requête et ajuster cette fonction en conséquence.
-    Cette fonction est un point de départ, pas un produit fini.
+    Chaque <item> du flux ne contient généralement pas de coordonnées
+    précises : l'adresse est extraite du titre et géocodée séparément
+    (voir geocode_address) avant le calcul du temps de route.
+
+    Si Centris ne propose pas de flux RSS pour ce type de recherche,
+    voir la note dans le README pour l'alternative DuProprio.
     """
-    url = "https://www.centris.ca/property/GetInscriptions"
-    lat, lon = origin
-    delta = radius_km / 111  # ~111 km par degré de latitude
+    if not CENTRIS_RSS_URL:
+        raise RuntimeError(
+            "CENTRIS_RSS_URL n'est pas configuré dans .env. "
+            "Voir le README (section 2) pour comment récupérer l'URL du flux RSS."
+        )
 
-    payload = {
-        "startPosition": 0,
-        "filters": {
-            "category": "Cottage",
-            "transactionType": "Sale",
-            "characteristics": ["Waterfront"],
-            "boundingBox": {
-                "north": lat + delta,
-                "south": lat - delta,
-                "east": lon + delta,
-                "west": lon - delta,
-            },
-        },
-    }
-
-    resp = requests.post(url, json=payload, timeout=15)
+    resp = requests.get(CENTRIS_RSS_URL, timeout=15)
     resp.raise_for_status()
-    body = resp.json()
-    return body.get("listings", [])
+    root = ET.fromstring(resp.content)
+
+    listings = []
+    for item in root.iter("item"):
+        link = (item.findtext("link") or "").strip()
+        guid = (item.findtext("guid") or "").strip() or link
+        title = (item.findtext("title") or "").strip()
+        description = (item.findtext("description") or "").strip()
+        if not link or not guid:
+            continue
+        listings.append(
+            {
+                "id": guid,
+                "url": link,
+                "address": title or "Voir l'annonce",
+                "price": parse_price(title, description),
+            }
+        )
+    return listings
+
+
+def geocode_address(address: str) -> tuple[float, float] | None:
+    """Géocode l'adresse d'une annonce via Nominatim. Retourne None si introuvable."""
+    url = "https://nominatim.openstreetmap.org/search"
+    params = {"q": address, "country": "Canada", "format": "json"}
+    headers = {"User-Agent": "chalet-monitor-personnel/1.0"}
+    resp = requests.get(url, params=params, headers=headers, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    if not data:
+        return None
+    return float(data[0]["lat"]), float(data[0]["lon"])
 
 
 def load_state() -> set[str]:
@@ -193,18 +227,21 @@ def main() -> None:
     origin = geocode_postal_code(ORIGIN_POSTAL_CODE)
     seen_ids = load_state()
 
-    raw_listings = search_centris_waterfront_cottages(origin, SEARCH_RADIUS_KM)
+    raw_listings = fetch_centris_rss_listings()
+    unseen = [l for l in raw_listings if l["id"] not in seen_ids]
 
-    candidates = []
-    for listing in raw_listings:
-        dest = (listing["lat"], listing["lon"])
-        minutes = driving_time_minutes(origin, dest)
+    new_listings = []
+    for listing in unseen:
+        coords = geocode_address(listing["address"])
+        time.sleep(1)  # respecter la limite Nominatim (1 requête/seconde)
+        if coords is None:
+            continue
+        minutes = driving_time_minutes(origin, coords)
         time.sleep(1)  # ménager le serveur OSRM public
         if minutes <= MAX_DRIVE_HOURS * 60:
+            listing["lat"], listing["lon"] = coords
             listing["drive_minutes"] = minutes
-            candidates.append(listing)
-
-    new_listings = [l for l in candidates if l["id"] not in seen_ids]
+            new_listings.append(listing)
 
     if new_listings:
         map_path = build_map_image(origin, new_listings)
@@ -214,7 +251,7 @@ def main() -> None:
     else:
         print("Aucune nouvelle annonce trouvée.")
 
-    seen_ids.update(l["id"] for l in candidates)
+    seen_ids.update(l["id"] for l in raw_listings)
     save_state(seen_ids)
 
 
