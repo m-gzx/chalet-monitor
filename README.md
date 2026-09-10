@@ -23,11 +23,12 @@ constantes en haut de `monitor.py` (`ORIGIN_POSTAL_CODE`, `MAX_DRIVE_HOURS`,
 
 ## 2. Centris : requête validée — comment faire pareil pour un autre site
 
-Centris n'a pas d'API publique documentée, mais `monitor.py` utilise
-maintenant une requête interne **confirmée** par inspection réseau (voir
-section suivante). Si tu veux ajouter DuProprio, uBee, ou re-valider
-Centris après un changement de leur site, voici la marche à suivre avec
-les outils de développement du navigateur (F12) :
+Centris et uBee n'ont pas d'API publique documentée, mais `monitor.py`
+utilise maintenant des requêtes internes **confirmées** par inspection
+réseau pour les deux (voir sections suivantes). Si tu veux ajouter
+DuProprio (toujours non résolu, voir plus bas), ou re-valider Centris/uBee
+après un changement de leur site, voici la marche à suivre avec les outils
+de développement du navigateur (F12) :
 
 ### Marche à suivre générale (Chrome, Edge ou Firefox)
 
@@ -89,15 +90,25 @@ les outils de développement du navigateur (F12) :
   `search_duproprio_waterfront_cottages()`, suivant le même principe que
   celle de Centris.
 
-### uBee (ubee.com/carte/a-vendre)
+### uBee (ubee.com/carte/a-vendre) — ✅ validé le 2026-09-10
 
-- Même méthode : ouvrir `https://ubee.com/carte/a-vendre`, F12 → Réseau →
-  filtrer Fetch/XHR, faire une recherche par secteur, puis repérer la
-  requête qui charge les fiches affichées sur la carte (souvent déclenchée
-  quand on déplace/zoome la carte, donc utile de laisser le filtre Réseau
-  ouvert *avant* de bouger la carte).
-- Une troisième fonction, par exemple `search_ubee_waterfront_cottages()`,
-  suivant le même principe.
+- L'endpoint utilisé est `POST https://api.ubee.ca/api/anonymous/Search/SearchProperties`,
+  paginé par `?pageIndex=N` (0-indexé) en paramètre d'URL.
+- Contrairement à Centris, uBee n'a **aucune protection Cloudflare/cookie** —
+  `search_ubee_waterfront_cottages()` utilise donc un simple `requests.post()`,
+  pas besoin de Playwright.
+- Le filtre bord de l'eau : `complimentaryFilters.hasWaterAccess: true`. uBee
+  n'a pas de catégorie "Chalet" séparée dans son interface — les chalets y
+  sont classés sous "Unifamiliale" ou "Terrain", d'où
+  `inscriptionTypes: ["Terrain", "Unifamiliale"]`.
+- La réponse est du JSON propre (pas de HTML à parser comme pour Centris) :
+  `results[].id/address/city/askPrice/latitude/longitude/citySlug/slugFr`.
+- URL de fiche : `https://ubee.com/a-vendre/{citySlug}/{slugFr}` (confirmée
+  sur un exemple réel).
+- Si uBee change son endpoint ou son format dans le futur, refaire la
+  capture avec la marche à suivre générale ci-dessus et ajuster
+  `search_ubee_waterfront_cottages()` / `parse_ubee_listings()` en
+  conséquence.
 
 **Alternative plus simple si les API s'avèrent trop instables** :
 utiliser un flux RSS de recherche sauvegardée (Centris et DuProprio en

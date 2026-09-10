@@ -228,7 +228,7 @@ def parse_ubee_listings(results: list[dict]) -> list[dict]:
     for r in results:
         listings.append({
             "id": r["id"],
-            "url": f"https://ubee.com/fr/proprietes/{r['citySlug']}/{r['slugFr']}",
+            "url": f"https://ubee.com/a-vendre/{r['citySlug']}/{r['slugFr']}",
             "price": r.get("askPrice"),
             "address": f"{r['address']}, {r['city']}",
             "lat": r["latitude"],
@@ -256,9 +256,8 @@ def search_ubee_waterfront_cottages(origin: tuple[float, float], radius_km: floa
     par cet endpoint — le filtre de temps de route réel, voir main(),
     réduit ensuite aux annonces à MAX_DRIVE_HOURS ou moins).
 
-    URL de fiche construite à partir de citySlug/slugFr — à valider avec un
-    exemple réel (cliquer une annonce sur ubee.com) et ajuster si le format
-    diffère.
+    URL de fiche : https://ubee.com/a-vendre/{citySlug}/{slugFr}, confirmée
+    le 2026-09-10 sur un exemple réel (ex. .../a-vendre/chertsey/terrain-...).
     """
     url = "https://api.ubee.ca/api/anonymous/Search/SearchProperties"
     headers = {
