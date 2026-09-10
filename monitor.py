@@ -49,42 +49,46 @@ def geocode_postal_code(postal_code: str) -> tuple[float, float]:
 
     Nominatim n'indexe presque jamais les codes postaux canadiens complets
     à 6 caractères comme entités propres (Canada Post ne publie pas de
-    limites précises par LDU) : la recherche structurée `postalcode=`
-    échoue donc systématiquement pour ce genre de code (confirmé en
-    production le 2026-09-10 — `ValueError: Impossible de géocoder
-    G3A2P8`). On utilise plutôt la recherche libre (`q=`), qui résout
-    généralement via les données d'adresses OSM ; si le code complet ne
-    donne rien, on retente avec seulement le secteur de tri (FSA, les 3
-    premiers caractères), presque toujours indexé.
+    limites précises par LDU), mais indexe généralement les secteurs de tri
+    (FSA, les 3 premiers caractères) comme polygones dans OSM.
 
-    Format attendu par Nominatim : "A1A 1A1" (avec espace au milieu), pas
-    "A1A1A1" — sans l'espace, la recherche libre peut retourner un résultat
-    non pertinent au lieu de rien du tout (silencieusement, sans erreur).
+    Historique des essais (tous en production, le 2026-09-10) :
+    1. Recherche structurée `postalcode=` avec le code complet seul :
+       échoue (`ValueError: Impossible de géocoder G3A2P8`) — attendu, OSM
+       n'a pas de polygone au niveau LDU.
+    2. Recherche libre `q="{code}, Canada"` : ne lève plus d'erreur, mais
+       résout vers un mauvais endroit — il existe un lieu-dit nommé
+       littéralement "Canada" à Pike County, Kentucky (États-Unis), et
+       Nominatim fait correspondre CE lieu plutôt que d'interpréter
+       "Canada" comme le pays (`"G3A 2P8, Canada" -> "Canada, Pike County,
+       Kentucky, 41519, United States"`), donnant une origine à ~1900 km au
+       sud sans la moindre erreur.
+    3. Recherche libre `q="{code}"` + `countrycodes=ca` (sans le mot
+       "Canada" en texte) : retourne 0 résultat pour le code complet ET
+       pour le FSA seul — sans "Canada" comme ancre textuelle, le
+       tokenizer de Nominatim ne trouve aucune correspondance du tout pour
+       un code postal nu, même restreint géographiquement.
 
-    Piège découvert en production le 2026-09-10 : ajouter ", Canada" en
-    texte libre dans la requête est trompeur — il existe un lieu-dit nommé
-    littéralement "Canada" à Pike County, Kentucky (États-Unis), et
-    Nominatim a fait correspondre CE lieu plutôt que d'interpréter "Canada"
-    comme le pays du code postal (`"G3A 2P8, Canada" -> "Canada, Pike
-    County, Kentucky, 41519, United States"`), donnant une origine à
-    ~1900 km au sud sans la moindre erreur. On restreint donc la recherche
-    au pays via le paramètre structuré `countrycodes=ca` plutôt que par du
-    texte libre ambigu.
+    Solution retenue : la recherche **structurée** dédiée aux codes
+    postaux (`postalcode=` + `country=`), pas la recherche libre — on
+    retente avec le FSA seul si le code complet échoue, le FSA étant
+    presque toujours mappé comme polygone même quand le code complet ne
+    l'est pas.
     """
     url = "https://nominatim.openstreetmap.org/search"
     headers = {"User-Agent": "chalet-monitor-personnel/1.0"}
 
-    for query in (f"{postal_code[:3]} {postal_code[3:]}", postal_code[:3]):
+    for code in (f"{postal_code[:3]} {postal_code[3:]}", postal_code[:3]):
         resp = requests.get(
             url,
-            params={"q": query, "format": "json", "countrycodes": "ca"},
+            params={"postalcode": code, "country": "Canada", "format": "json"},
             headers=headers,
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
         if data:
-            print(f"[Géocodage] \"{query}\" (countrycodes=ca) -> {data[0].get('display_name')}")
+            print(f"[Géocodage] postalcode=\"{code}\" -> {data[0].get('display_name')}")
             return float(data[0]["lat"]), float(data[0]["lon"])
         time.sleep(1)  # respecter la politique d'usage de Nominatim entre deux essais
 
