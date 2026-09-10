@@ -56,15 +56,23 @@ def geocode_postal_code(postal_code: str) -> tuple[float, float]:
     généralement via les données d'adresses OSM ; si le code complet ne
     donne rien, on retente avec seulement le secteur de tri (FSA, les 3
     premiers caractères), presque toujours indexé.
+
+    Format attendu par Nominatim : "A1A 1A1" (avec espace au milieu), pas
+    "A1A1A1" — sans l'espace, la recherche libre peut retourner un résultat
+    non pertinent au lieu de rien du tout (silencieusement, sans erreur),
+    ce qui explique probablement le run du 2026-09-10 où 0 annonce sur
+    1038 est tombée dans le rayon de recherche malgré une origine
+    "géocodée avec succès".
     """
     url = "https://nominatim.openstreetmap.org/search"
     headers = {"User-Agent": "chalet-monitor-personnel/1.0"}
 
-    for query in (f"{postal_code}, Canada", f"{postal_code[:3]}, Canada"):
+    for query in (f"{postal_code[:3]} {postal_code[3:]}, Canada", f"{postal_code[:3]}, Canada"):
         resp = requests.get(url, params={"q": query, "format": "json"}, headers=headers, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         if data:
+            print(f"[Géocodage] \"{query}\" -> {data[0].get('display_name')}")
             return float(data[0]["lat"]), float(data[0]["lon"])
         time.sleep(1)  # respecter la politique d'usage de Nominatim entre deux essais
 
@@ -441,9 +449,17 @@ def main() -> None:
     origin = geocode_postal_code(ORIGIN_POSTAL_CODE)
     seen_ids = load_state()
 
+    print(f"Origine ({ORIGIN_POSTAL_CODE}) géocodée à {origin}.")
+
     raw_listings = search_centris_waterfront_cottages(origin, SEARCH_RADIUS_KM)
     raw_listings += search_ubee_waterfront_cottages(origin, SEARCH_RADIUS_KM)
     print(f"{len(raw_listings)} annonce(s) brute(s) trouvée(s) (Centris + uBee).")
+    for l in raw_listings[:5]:
+        d = haversine_km(origin, (l["lat"], l["lon"]))
+        print(f"  échantillon : {l.get('address')} — ({l['lat']}, {l['lon']}) — {d:.0f} km à vol d'oiseau")
+    if raw_listings:
+        distances = [haversine_km(origin, (l["lat"], l["lon"])) for l in raw_listings]
+        print(f"Distance à vol d'oiseau min={min(distances):.0f} km, max={max(distances):.0f} km.")
 
     # Pré-filtre à vol d'oiseau avant d'appeler OSRM : la route est presque
     # toujours plus longue que la ligne droite, donc ce filtre ne peut pas
