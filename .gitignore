@@ -1,6 +1,6 @@
-.env
 state.json
 map.png
+report.html
 __pycache__/
 *.pyc
 .venv/
