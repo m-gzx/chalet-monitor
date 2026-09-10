@@ -10,28 +10,22 @@ Flux :
      à vol d'oiseau.
   4. Compare avec les annonces déjà vues (state.json) pour ne garder que
      les nouvelles.
-  5. Génère une carte (image statique) + un courriel HTML avec liens
-     cliquables, et l'envoie.
+  5. Génère un rapport HTML autonome (carte + fiches cliquables) et
+     l'ouvre dans le navigateur par défaut.
 
 Nécessite : pip install -r requirements.txt
-Configuration : copier .env.example en .env et remplir les valeurs.
+Aucune configuration/secret requis — ajuster les constantes ci-dessous
+au besoin (code postal, rayon, temps de route max).
 """
 
+import base64
 import json
-import os
-import smtplib
 import time
-from datetime import datetime
-from email.mime.image import MIMEImage
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import webbrowser
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 from staticmap import CircleMarker, StaticMap
-
-load_dotenv()
 
 # --- CONFIGURATION ---
 ORIGIN_POSTAL_CODE = "G3A2P8"
@@ -41,12 +35,7 @@ SEARCH_RADIUS_KM = 180  # rayon large à vol d'oiseau, filtré ensuite par temps
 BASE_DIR = Path(__file__).parent
 STATE_FILE = BASE_DIR / "state.json"
 MAP_FILE = BASE_DIR / "map.png"
-
-EMAIL_FROM = os.environ["EMAIL_FROM"]
-EMAIL_TO = os.environ["EMAIL_TO"]
-EMAIL_APP_PASSWORD = os.environ["EMAIL_APP_PASSWORD"]
-SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+REPORT_FILE = BASE_DIR / "report.html"
 
 
 def geocode_postal_code(postal_code: str) -> tuple[float, float]:
@@ -134,59 +123,75 @@ def save_state(seen_ids: set[str]) -> None:
 
 
 def build_map_image(origin: tuple[float, float], listings: list[dict]) -> Path:
-    m = StaticMap(800, 600)
-    m.add_marker(CircleMarker((origin[1], origin[0]), "blue", 14))  # point de départ
+    m = StaticMap(800, 500)
+    m.add_marker(CircleMarker((origin[1], origin[0]), "#2563eb", 14))  # point de départ
     for listing in listings:
-        m.add_marker(CircleMarker((listing["lon"], listing["lat"]), "red", 12))
+        m.add_marker(CircleMarker((listing["lon"], listing["lat"]), "#dc2626", 12))
     image = m.render()
     image.save(str(MAP_FILE))
     return MAP_FILE
 
 
-def build_email(new_listings: list[dict], map_path: Path) -> MIMEMultipart:
-    msg = MIMEMultipart("related")
-    msg["Subject"] = (
-        f"🏡 {len(new_listings)} nouveau(x) chalet(s) bord de l'eau "
-        f"— {datetime.now():%Y-%m-%d}"
-    )
-    msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
+def build_html_report(new_listings: list[dict], map_path: Path, generated_at: str) -> Path:
+    map_data_uri = "data:image/png;base64," + base64.b64encode(map_path.read_bytes()).decode()
 
-    rows = ""
+    cards = ""
     for l in new_listings:
-        rows += (
-            "<tr>"
-            f"<td><a href='{l['url']}'>{l.get('address', 'Voir l’annonce')}</a></td>"
-            f"<td>{l.get('price', '?')} $</td>"
-            f"<td>{l['drive_minutes']:.0f} min</td>"
-            "</tr>"
-        )
+        address = l.get("address", "Voir l'annonce")
+        price = l.get("price", "?")
+        cards += f"""
+        <a class="card" href="{l['url']}" target="_blank" rel="noopener">
+          <div class="card-body">
+            <div class="card-address">{address}</div>
+            <div class="card-meta">
+              <span class="price">{price} $</span>
+              <span class="drive">🚗 {l['drive_minutes']:.0f} min</span>
+            </div>
+          </div>
+        </a>"""
 
-    html = f"""
-    <html><body style="font-family: sans-serif;">
-    <h2>Nouveaux chalets bord de l'eau — {MAX_DRIVE_HOURS:.0f}h de route max de {ORIGIN_POSTAL_CODE}</h2>
-    <img src="cid:map_image" width="800" style="border:1px solid #ccc;"><br><br>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>Adresse (lien cliquable)</th><th>Prix</th><th>Temps de route</th></tr>
-      {rows}
-    </table>
-    </body></html>
-    """
-    msg.attach(MIMEText(html, "html"))
+    html = f"""<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Chalets bord de l'eau</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{
+    margin: 0; padding: 24px 16px; background: #f5f5f4; color: #1c1917;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }}
+  .wrap {{ max-width: 900px; margin: 0 auto; }}
+  h1 {{ font-size: 1.4rem; margin: 0 0 4px; }}
+  .subtitle {{ color: #57534e; margin: 0 0 20px; font-size: 0.9rem; }}
+  .map {{ width: 100%; border-radius: 12px; border: 1px solid #d6d3d1; display: block; margin-bottom: 24px; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }}
+  .card {{
+    display: block; background: white; border: 1px solid #e7e5e4; border-radius: 10px;
+    padding: 14px 16px; text-decoration: none; color: inherit; transition: box-shadow .15s, transform .15s;
+  }}
+  .card:hover {{ box-shadow: 0 4px 14px rgba(0,0,0,.08); transform: translateY(-1px); }}
+  .card-address {{ font-weight: 600; margin-bottom: 8px; }}
+  .card-meta {{ display: flex; justify-content: space-between; font-size: 0.9rem; color: #44403c; }}
+  .price {{ font-weight: 600; color: #15803d; }}
+  footer {{ margin-top: 24px; font-size: 0.8rem; color: #78716c; }}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🏡 {len(new_listings)} nouveau(x) chalet(s) bord de l'eau</h1>
+    <p class="subtitle">{MAX_DRIVE_HOURS:.0f}h de route max de {ORIGIN_POSTAL_CODE} — généré le {generated_at}</p>
+    <img class="map" src="{map_data_uri}" alt="Carte des chalets trouvés">
+    <div class="grid">
+      {cards}
+    </div>
+    <footer>chalet-monitor · rapport régénéré à chaque nouvelle trouvaille</footer>
+  </div>
+</body>
+</html>"""
 
-    with open(map_path, "rb") as f:
-        img = MIMEImage(f.read())
-        img.add_header("Content-ID", "<map_image>")
-        msg.attach(img)
-
-    return msg
-
-
-def send_email(msg: MIMEMultipart) -> None:
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-        server.starttls()
-        server.login(EMAIL_FROM, EMAIL_APP_PASSWORD)
-        server.send_message(msg)
+    REPORT_FILE.write_text(html, encoding="utf-8")
+    return REPORT_FILE
 
 
 def main() -> None:
@@ -207,10 +212,12 @@ def main() -> None:
     new_listings = [l for l in candidates if l["id"] not in seen_ids]
 
     if new_listings:
+        from datetime import datetime
+
         map_path = build_map_image(origin, new_listings)
-        msg = build_email(new_listings, map_path)
-        send_email(msg)
-        print(f"{len(new_listings)} nouvelle(s) annonce(s) envoyée(s) par courriel.")
+        report_path = build_html_report(new_listings, map_path, f"{datetime.now():%Y-%m-%d %H:%M}")
+        webbrowser.open(f"file://{report_path.resolve()}")
+        print(f"{len(new_listings)} nouvelle(s) annonce(s) — rapport ouvert : {report_path}")
     else:
         print("Aucune nouvelle annonce trouvée.")
 
