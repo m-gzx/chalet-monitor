@@ -9,19 +9,26 @@ bord de l'eau, à 2h de route ou moins de G3A2P8, et ouvre un rapport HTML
 ```bash
 cd chalet-monitor
 pip install -r requirements.txt
+playwright install chromium
 ```
+
+La deuxième commande télécharge un navigateur Chromium headless
+(~150-300 Mo, une seule fois) — utilisé pour obtenir une session Centris
+valide face à sa protection Cloudflare (voir section 2).
 
 Aucun secret/compte courriel requis. Pour ajuster le point de départ, le
 rayon de recherche ou le temps de route max, modifier directement les
 constantes en haut de `monitor.py` (`ORIGIN_POSTAL_CODE`, `MAX_DRIVE_HOURS`,
 `SEARCH_RADIUS_KM`).
 
-## 2. Étape importante : ajuster la requête Centris
+## 2. Centris : requête validée — comment faire pareil pour un autre site
 
-Centris n'a pas d'API publique documentée. `monitor.py` contient une
-première tentative basée sur l'endpoint interne `/property/GetInscriptions`,
-mais **il faut la valider avant de l'automatiser**. Voici comment capturer
-la vraie requête avec les outils de développement du navigateur (F12) :
+Centris et uBee n'ont pas d'API publique documentée, mais `monitor.py`
+utilise maintenant des requêtes internes **confirmées** par inspection
+réseau pour les deux (voir sections suivantes). Si tu veux ajouter
+DuProprio (toujours non résolu, voir plus bas), ou re-valider Centris/uBee
+après un changement de leur site, voici la marche à suivre avec les outils
+de développement du navigateur (F12) :
 
 ### Marche à suivre générale (Chrome, Edge ou Firefox)
 
@@ -51,13 +58,27 @@ la vraie requête avec les outils de développement du navigateur (F12) :
     si présents) dans une conversation Claude Code pour ajuster
     `search_centris_waterfront_cottages()` avec les bons noms de champs.
 
-### Spécifique à Centris
+### Spécifique à Centris — ✅ validé le 2026-09-10
 
-- L'endpoint actuel dans le code (`/property/GetInscriptions`) est une
-  hypothèse à confirmer — le vrai nom peut différer.
-- Le filtre "bord de l'eau" correspond probablement à une valeur précise
-  dans une liste de caractéristiques (`characteristics`) — à repérer dans
-  le payload une fois une recherche filtrée faite sur le site.
+- L'endpoint utilisé est `POST https://www.centris.ca/Property/GetInscriptions`
+  (vue "Galerie"), paginé par `page`/`pageSize` (20 par page), avec la
+  structure de filtres `FieldsValues` déjà intégrée dans `monitor.py`.
+- Un premier essai avec `GetMarkers` (`/api/property/map/GetMarkers`,
+  vue "Carte") s'est avéré être un cul-de-sac : cet endpoint ne retourne
+  que des **clusters** de propriétés (position + nombre regroupé), pas
+  d'annonces individuelles — gardé en historique dans le code/commits
+  mais plus utilisé.
+- La réponse de `GetInscriptions` contient le HTML pré-rendu des fiches
+  (`d.Result.html`) plutôt que des champs JSON — `monitor.py` le parse
+  avec BeautifulSoup (`parse_centris_listing_cards()`) pour en extraire
+  id, prix, adresse, url et coordonnées de chaque annonce.
+- Centris est protégé par Cloudflare — `monitor.py` utilise Playwright
+  pour établir une session valide avant d'appeler cet endpoint (voir
+  section 1, `playwright install chromium`).
+- Si Centris change son HTML ou son endpoint dans le futur, refaire la
+  capture avec la marche à suivre générale ci-dessus (viser la vue
+  **Galerie**, pas **Carte**) et ajuster `search_centris_waterfront_cottages()`
+  / `parse_centris_listing_cards()` en conséquence.
 
 ### Spécifique à DuProprio
 
@@ -69,15 +90,25 @@ la vraie requête avec les outils de développement du navigateur (F12) :
   `search_duproprio_waterfront_cottages()`, suivant le même principe que
   celle de Centris.
 
-### uBee (ubee.com/carte/a-vendre)
+### uBee (ubee.com/carte/a-vendre) — ✅ validé le 2026-09-10
 
-- Même méthode : ouvrir `https://ubee.com/carte/a-vendre`, F12 → Réseau →
-  filtrer Fetch/XHR, faire une recherche par secteur, puis repérer la
-  requête qui charge les fiches affichées sur la carte (souvent déclenchée
-  quand on déplace/zoome la carte, donc utile de laisser le filtre Réseau
-  ouvert *avant* de bouger la carte).
-- Une troisième fonction, par exemple `search_ubee_waterfront_cottages()`,
-  suivant le même principe.
+- L'endpoint utilisé est `POST https://api.ubee.ca/api/anonymous/Search/SearchProperties`,
+  paginé par `?pageIndex=N` (0-indexé) en paramètre d'URL.
+- Contrairement à Centris, uBee n'a **aucune protection Cloudflare/cookie** —
+  `search_ubee_waterfront_cottages()` utilise donc un simple `requests.post()`,
+  pas besoin de Playwright.
+- Le filtre bord de l'eau : `complimentaryFilters.hasWaterAccess: true`. uBee
+  n'a pas de catégorie "Chalet" séparée dans son interface — les chalets y
+  sont classés sous "Unifamiliale" ou "Terrain", d'où
+  `inscriptionTypes: ["Terrain", "Unifamiliale"]`.
+- La réponse est du JSON propre (pas de HTML à parser comme pour Centris) :
+  `results[].id/address/city/askPrice/latitude/longitude/citySlug/slugFr`.
+- URL de fiche : `https://ubee.com/a-vendre/{citySlug}/{slugFr}` (confirmée
+  sur un exemple réel).
+- Si uBee change son endpoint ou son format dans le futur, refaire la
+  capture avec la marche à suivre générale ci-dessus et ajuster
+  `search_ubee_waterfront_cottages()` / `parse_ubee_listings()` en
+  conséquence.
 
 **Alternative plus simple si les API s'avèrent trop instables** :
 utiliser un flux RSS de recherche sauvegardée (Centris et DuProprio en
@@ -94,7 +125,31 @@ La première exécution va probablement ouvrir un rapport avec TOUTES les
 annonces existantes (rien n'est encore dans `state.json`). C'est normal —
 les exécutions suivantes ne signaleront que les nouveautés.
 
-## 4. Automatiser avec cron (Mac/Linux)
+## 4. Automatiser avec GitHub Actions (recommandé)
+
+Le dépôt inclut `.github/workflows/monitor.yml` : un workflow qui tourne
+tous les jours (cron `0 12 * * *`, ~7-8h heure de l'Est), exécute
+`monitor.py` sur un runner GitHub, committe l'`state.json` mis à jour dans
+le dépôt (pour se souvenir des annonces déjà vues d'une exécution à
+l'autre) et publie `report.html` sur **GitHub Pages** s'il y a du nouveau.
+
+Étapes pour l'activer (une seule fois) :
+
+1. Pousser ce dépôt sur GitHub (déjà fait si tu lis ceci depuis GitHub).
+2. Dans le dépôt GitHub : **Settings → Pages → Build and deployment →
+   Source**, choisir **GitHub Actions**.
+3. Le workflow tourne automatiquement chaque jour, ou manuellement via
+   l'onglet **Actions → Chalet monitor → Run workflow**.
+4. L'URL du site (visible dans Settings → Pages une fois le premier
+   déploiement fait, ou dans le résumé du run sous "Déploie sur GitHub
+   Pages") affiche le rapport le plus récent. Le site n'est mis à jour que
+   lorsqu'il y a de nouvelles annonces — sinon la dernière version reste en
+   ligne.
+
+Pas besoin de garder un ordinateur allumé ni d'installer quoi que ce soit
+localement pour cette option.
+
+## 4bis. Automatiser avec cron (Mac/Linux, en local)
 
 ```bash
 crontab -e
