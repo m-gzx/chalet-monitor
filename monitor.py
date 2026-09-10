@@ -37,6 +37,15 @@ ORIGIN_POSTAL_CODE = "G3A2P8"
 MAX_DRIVE_HOURS = 2.0
 SEARCH_RADIUS_KM = 180  # rayon large à vol d'oiseau, filtré ensuite par temps de route réel
 
+# Coordonnées de secours pour ORIGIN_POSTAL_CODE, utilisées seulement si
+# Nominatim échoue à le géocoder (voir geocode_postal_code : trois stratégies
+# différentes testées en production le 2026-09-10 n'ont retourné aucune
+# donnée de code postal pour le Canada sur l'instance publique). Approximatif
+# (secteur Saint-Nicolas, Lévis, QC) mais largement suffisant pour un filtre
+# à 180 km / 2h de route — à corriger si besoin, et à mettre à jour si
+# ORIGIN_POSTAL_CODE change.
+FALLBACK_ORIGIN_COORDS = (46.72, -71.28)
+
 BASE_DIR = Path(__file__).parent
 STATE_FILE = BASE_DIR / "state.json"
 MAP_FILE = BASE_DIR / "map.png"
@@ -68,12 +77,17 @@ def geocode_postal_code(postal_code: str) -> tuple[float, float]:
        pour le FSA seul — sans "Canada" comme ancre textuelle, le
        tokenizer de Nominatim ne trouve aucune correspondance du tout pour
        un code postal nu, même restreint géographiquement.
+    4. Recherche **structurée** dédiée aux codes postaux (`postalcode=` +
+       `country=`) : retourne aussi 0 résultat, pour le code complet ET le
+       FSA seul. L'instance publique de Nominatim semble simplement n'avoir
+       aucune donnée de code postal indexée pour le Canada, quelle que soit
+       la méthode de recherche.
 
-    Solution retenue : la recherche **structurée** dédiée aux codes
-    postaux (`postalcode=` + `country=`), pas la recherche libre — on
-    retente avec le FSA seul si le code complet échoue, le FSA étant
-    presque toujours mappé comme polygone même quand le code complet ne
-    l'est pas.
+    Après ces quatre échecs, on renonce à géocoder le code postal lui-même
+    et on retombe sur FALLBACK_ORIGIN_COORDS (coordonnées approximatives
+    codées en dur) plutôt que de faire planter tout le pipeline — un script
+    personnel à origine fixe n'a pas besoin de dépendre d'un géocodage fiable
+    à chaque exécution.
     """
     url = "https://nominatim.openstreetmap.org/search"
     headers = {"User-Agent": "chalet-monitor-personnel/1.0"}
@@ -92,7 +106,11 @@ def geocode_postal_code(postal_code: str) -> tuple[float, float]:
             return float(data[0]["lat"]), float(data[0]["lon"])
         time.sleep(1)  # respecter la politique d'usage de Nominatim entre deux essais
 
-    raise ValueError(f"Impossible de géocoder {postal_code}")
+    print(
+        f"[Géocodage] échec de toutes les stratégies pour {postal_code} — "
+        f"utilisation des coordonnées de secours {FALLBACK_ORIGIN_COORDS}."
+    )
+    return FALLBACK_ORIGIN_COORDS
 
 
 def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
