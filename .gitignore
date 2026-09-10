@@ -1,0 +1,8 @@
+.env
+state.json
+map.png
+__pycache__/
+*.pyc
+.venv/
+venv/
+monitor.log
