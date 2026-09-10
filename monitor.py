@@ -43,16 +43,31 @@ REPORT_FILE = BASE_DIR / "report.html"
 
 
 def geocode_postal_code(postal_code: str) -> tuple[float, float]:
-    """Convertit un code postal canadien en (lat, lon) via Nominatim."""
+    """
+    Convertit un code postal canadien en (lat, lon) via Nominatim.
+
+    Nominatim n'indexe presque jamais les codes postaux canadiens complets
+    à 6 caractères comme entités propres (Canada Post ne publie pas de
+    limites précises par LDU) : la recherche structurée `postalcode=`
+    échoue donc systématiquement pour ce genre de code (confirmé en
+    production le 2026-09-10 — `ValueError: Impossible de géocoder
+    G3A2P8`). On utilise plutôt la recherche libre (`q=`), qui résout
+    généralement via les données d'adresses OSM ; si le code complet ne
+    donne rien, on retente avec seulement le secteur de tri (FSA, les 3
+    premiers caractères), presque toujours indexé.
+    """
     url = "https://nominatim.openstreetmap.org/search"
-    params = {"postalcode": postal_code, "country": "Canada", "format": "json"}
     headers = {"User-Agent": "chalet-monitor-personnel/1.0"}
-    resp = requests.get(url, params=params, headers=headers, timeout=10)
-    resp.raise_for_status()
-    data = resp.json()
-    if not data:
-        raise ValueError(f"Impossible de géocoder {postal_code}")
-    return float(data[0]["lat"]), float(data[0]["lon"])
+
+    for query in (f"{postal_code}, Canada", f"{postal_code[:3]}, Canada"):
+        resp = requests.get(url, params={"q": query, "format": "json"}, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data:
+            return float(data[0]["lat"]), float(data[0]["lon"])
+        time.sleep(1)  # respecter la politique d'usage de Nominatim entre deux essais
+
+    raise ValueError(f"Impossible de géocoder {postal_code}")
 
 
 def driving_time_minutes(origin: tuple[float, float], dest: tuple[float, float]) -> float:
