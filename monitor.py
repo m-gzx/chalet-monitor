@@ -222,6 +222,106 @@ def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: f
     return listings
 
 
+def parse_ubee_listings(results: list[dict]) -> list[dict]:
+    """Transforme les entrées brutes de SearchProperties en fiches structurées."""
+    listings = []
+    for r in results:
+        listings.append({
+            "id": r["id"],
+            "url": f"https://ubee.com/fr/proprietes/{r['citySlug']}/{r['slugFr']}",
+            "price": r.get("askPrice"),
+            "address": f"{r['address']}, {r['city']}",
+            "lat": r["latitude"],
+            "lon": r["longitude"],
+        })
+    return listings
+
+
+def search_ubee_waterfront_cottages(origin: tuple[float, float], radius_km: float) -> list[dict]:
+    """
+    Interroge l'endpoint interne de recherche uBee (SearchProperties),
+    capturé et validé par inspection réseau (F12) le 2026-09-10 avec le
+    filtre "bord de l'eau" actif sur ubee.com/carte/a-vendre.
+
+    Contrairement à Centris, uBee n'a aucune protection Cloudflare/cookie —
+    un simple requests.post() suffit, pas besoin de Playwright.
+
+    uBee n'a pas de catégorie "Chalet" distincte dans son interface : les
+    chalets y sont classés sous "Unifamiliale" (résidence uni-familiale) ou
+    "Terrain", d'où inscriptionTypes = ["Terrain", "Unifamiliale"] ci-dessous.
+
+    Pagination par ?pageIndex=N (0-indexé) en paramètre d'URL ; le corps de
+    la requête reste identique à chaque page (mapBoundaries fixe = bounding
+    box couvrant tout le Québec habité, comme radius_km n'est pas utilisé
+    par cet endpoint — le filtre de temps de route réel, voir main(),
+    réduit ensuite aux annonces à MAX_DRIVE_HOURS ou moins).
+
+    URL de fiche construite à partir de citySlug/slugFr — à valider avec un
+    exemple réel (cliquer une annonce sur ubee.com) et ajuster si le format
+    diffère.
+    """
+    url = "https://api.ubee.ca/api/anonymous/Search/SearchProperties"
+    headers = {
+        "accept": "text/json",
+        "content-type": "application/*+json",
+        "origin": "https://ubee.com",
+        "referer": "https://ubee.com/",
+    }
+    map_boundaries = {
+        "type": "Polygon",
+        "coordinates": [[
+            [-79.02226422505078, 41.32405887412813],
+            [-62.97773577494998, 41.32405887412813],
+            [-62.97773577494998, 52.397461900458296],
+            [-79.02226422505078, 52.397461900458296],
+            [-79.02226422505078, 41.32405887412813],
+        ]],
+    }
+    payload = {
+        "minBathrooms": 0,
+        "minBedrooms": 0,
+        "toBuild": False,
+        "onlineSinceInDays": 0,
+        "sortBy": "DateDescending",
+        "mapBoundaries": json.dumps(map_boundaries),
+        "listingType": "Seller",
+        "complimentaryFilters": {
+            "hasCitySewerSystem": False,
+            "hasCityWaterSupply": False,
+            "hasSwimmingPool": False,
+            "hasWaterAccess": True,
+            "isAccessibleReducedMobility": False,
+        },
+        "isResidential": True,
+        "minLandSurfaceInMeters": None,
+        "maxLandSurfaceInMeters": None,
+        "minLivingSurfaceInMeters": None,
+        "maxLivingSurfaceInMeters": None,
+        "hasGarage": False,
+        "inscriptionTypes": ["Terrain", "Unifamiliale"],
+    }
+
+    max_pages = 100  # garde-fou
+    listings: list[dict] = []
+    page_index = 0
+    while page_index < max_pages:
+        resp = requests.post(url, params={"pageIndex": page_index}, json=payload, headers=headers, timeout=15)
+        if not resp.ok:
+            raise RuntimeError(f"uBee a refusé la requête SearchProperties ({resp.status_code})")
+        data = resp.json()
+        page_results = data.get("results", [])
+        if not page_results:
+            break
+        listings.extend(parse_ubee_listings(page_results))
+        total_count = data.get("totalCount", 0)
+        if len(listings) >= total_count:
+            break
+        page_index += 1
+        time.sleep(1)  # ménager uBee entre les pages
+
+    return listings
+
+
 def load_state() -> set[str]:
     if STATE_FILE.exists():
         return set(json.loads(STATE_FILE.read_text()))
@@ -310,6 +410,7 @@ def main() -> None:
     seen_ids = load_state()
 
     raw_listings = search_centris_waterfront_cottages(origin, SEARCH_RADIUS_KM)
+    raw_listings += search_ubee_waterfront_cottages(origin, SEARCH_RADIUS_KM)
 
     candidates = []
     for listing in raw_listings:
