@@ -22,6 +22,7 @@ au besoin (code postal, rayon, temps de route max).
 
 import base64
 import json
+import math
 import os
 import time
 import webbrowser
@@ -70,10 +71,24 @@ def geocode_postal_code(postal_code: str) -> tuple[float, float]:
     raise ValueError(f"Impossible de géocoder {postal_code}")
 
 
+def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Distance à vol d'oiseau (km) entre deux points (lat, lon)."""
+    lat1, lon1, lat2, lon2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 6371 * 2 * math.asin(math.sqrt(h))
+
+
 def driving_time_minutes(origin: tuple[float, float], dest: tuple[float, float]) -> float:
     """
     Temps de route via OSRM (serveur public de démonstration).
     Usage personnel léger uniquement — ne pas appeler en boucle serrée.
+
+    En cas d'échec (timeout, erreur HTTP, réponse "code" != "Ok"), affiche
+    la raison sur stderr plutôt que de l'avaler silencieusement — un run du
+    2026-09-10 sur GitHub Actions a trouvé zéro candidat sur ~2000 annonces
+    sans que rien dans les logs n'explique pourquoi, ce qui a rendu le
+    diagnostic impossible après coup.
     """
     url = (
         f"https://router.project-osrm.org/route/v1/driving/"
@@ -84,9 +99,11 @@ def driving_time_minutes(origin: tuple[float, float], dest: tuple[float, float])
         resp.raise_for_status()
         data = resp.json()
         if data.get("code") != "Ok":
+            print(f"[OSRM] réponse non-Ok pour {dest} : {data.get('code')} — {data.get('message', '')}")
             return float("inf")
         return data["routes"][0]["duration"] / 60
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        print(f"[OSRM] échec de requête pour {dest} : {exc}")
         return float("inf")
 
 
@@ -426,15 +443,26 @@ def main() -> None:
 
     raw_listings = search_centris_waterfront_cottages(origin, SEARCH_RADIUS_KM)
     raw_listings += search_ubee_waterfront_cottages(origin, SEARCH_RADIUS_KM)
+    print(f"{len(raw_listings)} annonce(s) brute(s) trouvée(s) (Centris + uBee).")
+
+    # Pré-filtre à vol d'oiseau avant d'appeler OSRM : la route est presque
+    # toujours plus longue que la ligne droite, donc ce filtre ne peut pas
+    # exclure de vrai candidat, mais il évite des centaines d'appels OSRM
+    # inutiles (annonces à Gatineau, Saguenay, etc., évidemment hors zone) —
+    # important vu qu'OSRM est un serveur public de démo, sensible au
+    # rate-limiting sur de gros volumes séquentiels.
+    nearby = [l for l in raw_listings if haversine_km(origin, (l["lat"], l["lon"])) <= SEARCH_RADIUS_KM]
+    print(f"{len(nearby)} annonce(s) dans le rayon de {SEARCH_RADIUS_KM} km à vol d'oiseau.")
 
     candidates = []
-    for listing in raw_listings:
+    for listing in nearby:
         dest = (listing["lat"], listing["lon"])
         minutes = driving_time_minutes(origin, dest)
         time.sleep(1)  # ménager le serveur OSRM public
         if minutes <= MAX_DRIVE_HOURS * 60:
             listing["drive_minutes"] = minutes
             candidates.append(listing)
+    print(f"{len(candidates)} annonce(s) à {MAX_DRIVE_HOURS:.0f}h de route ou moins.")
 
     new_listings = [l for l in candidates if l["id"] not in seen_ids]
 
