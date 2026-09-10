@@ -73,43 +73,69 @@ def driving_time_minutes(origin: tuple[float, float], dest: tuple[float, float])
 
 def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: float) -> list[dict]:
     """
-    Interroge l'endpoint de recherche interne de Centris.
+    Interroge l'endpoint interne de la carte Centris (GetMarkers), capturé
+    par inspection réseau (F12) le 2026-09-10 sur une recherche
+    Chalet + Terrain + Bord de l'eau + Villégiature.
 
-    IMPORTANT : Centris n'offre pas d'API publique documentée. Ce payload
-    reproduit l'appel utilisé par leur carte de recherche (endpoint
-    /property/GetInscriptions), reconstitué par inspection réseau. La
-    structure exacte des filtres (noms de champs, valeurs pour
-    "bord de l'eau", format des coordonnées) peut changer sans préavis.
+    ATTENTION — Cloudflare : Centris est protégé par Cloudflare. La requête
+    capturée incluait des cookies de session (dont `cf_clearance`), obtenus
+    en résolvant un défi JavaScript qu'un simple `requests.post()` ne peut
+    pas faire. Sans session valide, cet appel risque de recevoir un 403 au
+    lieu du JSON attendu — surtout après expiration du cookie (quelques
+    heures à quelques jours). Voir la note dans le README sur l'option
+    Playwright pour obtenir une session valide avant chaque exécution.
 
-    -> À faire une première fois avec Claude Code : ouvrir centris.ca,
-    faire une recherche "chalet à vendre" + filtre "bord de l'eau" dans
-    le secteur voulu, puis inspecter l'onglet Réseau du navigateur pour
-    capturer la vraie requête et ajuster cette fonction en conséquence.
-    Cette fonction est un point de départ, pas un produit fini.
+    ENCORE À FAIRE : le format exact de la réponse (noms des champs par
+    annonce — id, lat/lon, prix, adresse, url) n'a pas encore été confirmé.
+    Le code ci-dessous suppose une liste sous la clé "markers" avec des
+    champs à valider/ajuster une fois un échantillon de réponse examiné.
     """
-    url = "https://www.centris.ca/property/GetInscriptions"
+    url = "https://www.centris.ca/api/property/map/GetMarkers"
     lat, lon = origin
     delta = radius_km / 111  # ~111 km par degré de latitude
 
     payload = {
-        "startPosition": 0,
-        "filters": {
-            "category": "Cottage",
-            "transactionType": "Sale",
-            "characteristics": ["Waterfront"],
-            "boundingBox": {
-                "north": lat + delta,
-                "south": lat - delta,
-                "east": lon + delta,
-                "west": lon - delta,
-            },
+        "zoomLevel": 6,
+        "mapBounds": {
+            "NorthEast": {"Lat": lat + delta, "Lng": lon + delta},
+            "SouthWest": {"Lat": lat - delta, "Lng": lon - delta},
         },
+        "mode": "Result",
+        "sort": "None",
+        "sortSeed": 1,
+        "query": {
+            "SearchName": "",
+            "UseGeographyShapes": 0,
+            "Filters": [],
+            "FieldsValues": [
+                {"fieldId": "PropertyType", "value": "Chalet", "fieldConditionId": "", "valueConditionId": "IsResidential"},
+                {"fieldId": "PropertyType", "value": "ResidentialLot", "fieldConditionId": "", "valueConditionId": "IsResidential"},
+                {"fieldId": "NearbyWater", "value": "Waterfront", "fieldConditionId": "IsResidential", "valueConditionId": ""},
+                {"fieldId": "Resort", "value": "Resort", "fieldConditionId": "IsResort", "valueConditionId": ""},
+                {"fieldId": "Category", "value": "Residential", "fieldConditionId": "", "valueConditionId": ""},
+                {"fieldId": "SellingType", "value": "Sale", "fieldConditionId": "", "valueConditionId": ""},
+                {"fieldId": "LivingArea", "value": "SquareFeet", "fieldConditionId": "IsResidentialNotLot", "valueConditionId": ""},
+                {"fieldId": "LandArea", "value": "SquareFeet", "fieldConditionId": "IsLandArea", "valueConditionId": ""},
+                {"fieldId": "SalePrice", "value": 0, "fieldConditionId": "ForSale", "valueConditionId": ""},
+                {"fieldId": "SalePrice", "value": 999999999999, "fieldConditionId": "ForSale", "valueConditionId": ""},
+            ],
+            "BrokerCode": None,
+            "OfficeKey": None,
+        },
+        "region": "Quebec",
+        "openListing": None,
     }
 
-    resp = requests.post(url, json=payload, timeout=15)
+    headers = {
+        "content-type": "application/json; charset=UTF-8",
+        "accept": "application/json, text/javascript, */*; q=0.01",
+        "x-requested-with": "XMLHttpRequest",
+    }
+
+    resp = requests.post(url, json=payload, headers=headers, timeout=15)
     resp.raise_for_status()
     body = resp.json()
-    return body.get("listings", [])
+    return body.get("markers", [])  # TODO: confirmer la vraie clé/structure de la réponse
 
 
 def load_state() -> set[str]:
