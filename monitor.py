@@ -75,77 +75,72 @@ def driving_time_minutes(origin: tuple[float, float], dest: tuple[float, float])
 
 def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: float) -> list[dict]:
     """
-    Interroge l'endpoint interne de la carte Centris (GetMarkers), capturé
-    par inspection réseau (F12) le 2026-09-10 sur une recherche
+    Interroge l'endpoint interne de recherche Centris (GetInscriptions),
+    capturé par inspection réseau (F12) le 2026-09-10 sur une recherche
     Chalet + Terrain + Bord de l'eau + Villégiature.
 
     Centris est protégé par Cloudflare : l'appel exige des cookies de
     session (dont `cf_clearance`) obtenus en résolvant un défi JavaScript.
     On utilise donc Playwright pour ouvrir une vraie page Centris une
     première fois (ce qui établit ces cookies dans le contexte du
-    navigateur), puis on référence la requête POST à travers ce même
-    contexte — elle envoie automatiquement les bons cookies.
+    navigateur), puis on référence les requêtes POST à travers ce même
+    contexte — elles envoient automatiquement les bons cookies.
 
-    IMPORTANT — réponse confirmée le 2026-09-10 : à un niveau de zoom
-    large (province), GetMarkers ne retourne que des CLUSTERS de
-    propriétés (position + "PointsCount" = nombre de propriétés
-    regroupées à cet endroit), pas des annonces individuelles — aucun id,
-    prix, adresse ni URL. C'est l'endpoint utilisé pour dessiner les pins
-    sur la carte, pas pour lister des annonces.
+    Historique :
+    - Un premier endpoint tenté (GetMarkers, /api/property/map/GetMarkers)
+      ne retourne que des clusters de positions pour dessiner la carte, pas
+      des annonces individuelles.
+    - GetInscriptions (/Property/GetInscriptions), lui, retourne les
+      fiches d'annonces (vue "Galerie" du site), paginées par 20
+      (`pageSize`/`page`) plutôt que par zone géographique — la requête
+      capturée n'a pas de rayon/bounding box, juste `"region": "Quebec"`
+      (aucune ville précisée dans la barre de recherche du site lors de la
+      capture). On parcourt donc toutes les pages retournées pour "Quebec"
+      et c'est le filtre de temps de route (voir main()) qui réduit
+      ensuite aux propriétés à MAX_DRIVE_HOURS ou moins de ORIGIN_POSTAL_CODE
+      — radius_km n'est donc pas utilisé ici pour l'instant (paramètre
+      conservé pour usage futur si une restriction géographique côté
+      Centris est ajoutée).
 
-    -> CETTE FONCTION EST DONC INCOMPLÈTE : il manque encore la requête
-    qui retourne les annonces individuelles avec leurs détails. Elle se
-    déclenche probablement en passant à la vue "Galerie" (liste) sur
-    centris.ca plutôt que "Carte" — à capturer de la même façon (F12 →
-    Réseau → Fetch/XHR) et à ajouter ici, ou à remplacer cette requête par
-    un niveau de zoom assez élevé pour que les clusters se dissolvent en
-    pins individuels (si chaque pin individuel contient alors un id
-    exploitable pour aller chercher les détails).
+    ENCORE À FAIRE : le format exact d'une annonce dans la réponse (clé du
+    tableau, champs id/prix/adresse/url par annonce — la vue est
+    "Thumbnail", donc la réponse contient peut-être du HTML pré-rendu par
+    fiche plutôt que des champs JSON structurés) reste à confirmer sur un
+    échantillon de réponse.
     """
     from playwright.sync_api import sync_playwright
 
-    url = "https://www.centris.ca/api/property/map/GetMarkers"
-    lat, lon = origin
-    delta = radius_km / 111  # ~111 km par degré de latitude
-
-    payload = {
-        "zoomLevel": 6,
-        "mapBounds": {
-            "NorthEast": {"Lat": lat + delta, "Lng": lon + delta},
-            "SouthWest": {"Lat": lat - delta, "Lng": lon - delta},
-        },
-        "mode": "Result",
-        "sort": "None",
-        "sortSeed": 1,
-        "query": {
-            "SearchName": "",
-            "UseGeographyShapes": 0,
-            "Filters": [],
-            "FieldsValues": [
-                {"fieldId": "PropertyType", "value": "Chalet", "fieldConditionId": "", "valueConditionId": "IsResidential"},
-                {"fieldId": "PropertyType", "value": "ResidentialLot", "fieldConditionId": "", "valueConditionId": "IsResidential"},
-                {"fieldId": "NearbyWater", "value": "Waterfront", "fieldConditionId": "IsResidential", "valueConditionId": ""},
-                {"fieldId": "Resort", "value": "Resort", "fieldConditionId": "IsResort", "valueConditionId": ""},
-                {"fieldId": "Category", "value": "Residential", "fieldConditionId": "", "valueConditionId": ""},
-                {"fieldId": "SellingType", "value": "Sale", "fieldConditionId": "", "valueConditionId": ""},
-                {"fieldId": "LivingArea", "value": "SquareFeet", "fieldConditionId": "IsResidentialNotLot", "valueConditionId": ""},
-                {"fieldId": "LandArea", "value": "SquareFeet", "fieldConditionId": "IsLandArea", "valueConditionId": ""},
-                {"fieldId": "SalePrice", "value": 0, "fieldConditionId": "ForSale", "valueConditionId": ""},
-                {"fieldId": "SalePrice", "value": 999999999999, "fieldConditionId": "ForSale", "valueConditionId": ""},
-            ],
-            "BrokerCode": None,
-            "OfficeKey": None,
-        },
-        "region": "Quebec",
-        "openListing": None,
+    url = "https://www.centris.ca/Property/GetInscriptions"
+    query = {
+        "SearchName": "",
+        "UseGeographyShapes": 0,
+        "Filters": [],
+        "FieldsValues": [
+            {"fieldId": "PropertyType", "value": "Chalet", "fieldConditionId": "", "valueConditionId": "IsResidential"},
+            {"fieldId": "PropertyType", "value": "ResidentialLot", "fieldConditionId": "", "valueConditionId": "IsResidential"},
+            {"fieldId": "NearbyWater", "value": "Waterfront", "fieldConditionId": "IsResidential", "valueConditionId": ""},
+            {"fieldId": "Resort", "value": "Resort", "fieldConditionId": "IsResort", "valueConditionId": ""},
+            {"fieldId": "Category", "value": "Residential", "fieldConditionId": "", "valueConditionId": ""},
+            {"fieldId": "SellingType", "value": "Sale", "fieldConditionId": "", "valueConditionId": ""},
+            {"fieldId": "LivingArea", "value": "SquareFeet", "fieldConditionId": "IsResidentialNotLot", "valueConditionId": ""},
+            {"fieldId": "LandArea", "value": "SquareFeet", "fieldConditionId": "IsLandArea", "valueConditionId": ""},
+            {"fieldId": "SalePrice", "value": 0, "fieldConditionId": "ForSale", "valueConditionId": ""},
+            {"fieldId": "SalePrice", "value": 999999999999, "fieldConditionId": "ForSale", "valueConditionId": ""},
+        ],
+        "BrokerCode": None,
+        "OfficeKey": None,
     }
 
     headers = {
         "content-type": "application/json; charset=UTF-8",
         "accept": "application/json, text/javascript, */*; q=0.01",
         "x-requested-with": "XMLHttpRequest",
-        "referer": "https://www.centris.ca/fr/propriete~a-vendre?view=Map",
+        "referer": "https://www.centris.ca/fr/propriete~a-vendre",
     }
+
+    page_size = 20
+    max_pages = 60  # garde-fou (60 * 20 = 1200 annonces max)
+    listings: list[dict] = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -156,21 +151,37 @@ def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: f
                     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
                 )
             )
-            # Établit la session (cookies Cloudflare inclus) avant l'appel API.
-            page = context.new_page()
-            page.goto("https://www.centris.ca/fr", wait_until="networkidle", timeout=30000)
+            # Établit la session (cookies Cloudflare inclus) avant les appels.
+            browser_page = context.new_page()
+            browser_page.goto("https://www.centris.ca/fr", wait_until="networkidle", timeout=30000)
 
-            resp = context.request.post(url, data=json.dumps(payload), headers=headers, timeout=15000)
-            if not resp.ok:
-                raise RuntimeError(
-                    f"Centris a refusé la requête GetMarkers ({resp.status}) — "
-                    "cookies de session ou défi Cloudflare probablement invalides."
-                )
-            body = resp.json()
+            for page_number in range(1, max_pages + 1):
+                payload = {
+                    "mode": "Result",
+                    "searchView": "Thumbnail",
+                    "sortSeed": 1,
+                    "sort": "None",
+                    "pageSize": page_size,
+                    "page": page_number,
+                    "query": query,
+                    "region": "Quebec",
+                }
+                resp = context.request.post(url, data=json.dumps(payload), headers=headers, timeout=15000)
+                if not resp.ok:
+                    raise RuntimeError(
+                        f"Centris a refusé la requête GetInscriptions ({resp.status}) — "
+                        "cookies de session ou défi Cloudflare probablement invalides."
+                    )
+                body = resp.json()
+                page_listings = body["d"]["Result"]["Inscriptions"]  # TODO: confirmer la clé exacte
+                if not page_listings:
+                    break
+                listings.extend(page_listings)
+                time.sleep(1)  # ménager Centris entre les pages
         finally:
             browser.close()
 
-    return body["d"]["Result"]["Markers"]  # clusters uniquement, voir note ci-dessus
+    return listings
 
 
 def load_state() -> set[str]:
