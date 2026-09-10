@@ -59,20 +59,32 @@ def geocode_postal_code(postal_code: str) -> tuple[float, float]:
 
     Format attendu par Nominatim : "A1A 1A1" (avec espace au milieu), pas
     "A1A1A1" — sans l'espace, la recherche libre peut retourner un résultat
-    non pertinent au lieu de rien du tout (silencieusement, sans erreur),
-    ce qui explique probablement le run du 2026-09-10 où 0 annonce sur
-    1038 est tombée dans le rayon de recherche malgré une origine
-    "géocodée avec succès".
+    non pertinent au lieu de rien du tout (silencieusement, sans erreur).
+
+    Piège découvert en production le 2026-09-10 : ajouter ", Canada" en
+    texte libre dans la requête est trompeur — il existe un lieu-dit nommé
+    littéralement "Canada" à Pike County, Kentucky (États-Unis), et
+    Nominatim a fait correspondre CE lieu plutôt que d'interpréter "Canada"
+    comme le pays du code postal (`"G3A 2P8, Canada" -> "Canada, Pike
+    County, Kentucky, 41519, United States"`), donnant une origine à
+    ~1900 km au sud sans la moindre erreur. On restreint donc la recherche
+    au pays via le paramètre structuré `countrycodes=ca` plutôt que par du
+    texte libre ambigu.
     """
     url = "https://nominatim.openstreetmap.org/search"
     headers = {"User-Agent": "chalet-monitor-personnel/1.0"}
 
-    for query in (f"{postal_code[:3]} {postal_code[3:]}, Canada", f"{postal_code[:3]}, Canada"):
-        resp = requests.get(url, params={"q": query, "format": "json"}, headers=headers, timeout=10)
+    for query in (f"{postal_code[:3]} {postal_code[3:]}", postal_code[:3]):
+        resp = requests.get(
+            url,
+            params={"q": query, "format": "json", "countrycodes": "ca"},
+            headers=headers,
+            timeout=10,
+        )
         resp.raise_for_status()
         data = resp.json()
         if data:
-            print(f"[Géocodage] \"{query}\" -> {data[0].get('display_name')}")
+            print(f"[Géocodage] \"{query}\" (countrycodes=ca) -> {data[0].get('display_name')}")
             return float(data[0]["lat"]), float(data[0]["lon"])
         time.sleep(1)  # respecter la politique d'usage de Nominatim entre deux essais
 
