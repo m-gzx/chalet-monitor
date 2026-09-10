@@ -38,13 +38,12 @@ MAX_DRIVE_HOURS = 2.0
 SEARCH_RADIUS_KM = 180  # rayon large à vol d'oiseau, filtré ensuite par temps de route réel
 
 # Coordonnées de secours pour ORIGIN_POSTAL_CODE, utilisées seulement si
-# Nominatim échoue à le géocoder (voir geocode_postal_code : trois stratégies
-# différentes testées en production le 2026-09-10 n'ont retourné aucune
-# donnée de code postal pour le Canada sur l'instance publique). Approximatif
-# (secteur Saint-Nicolas, Lévis, QC) mais largement suffisant pour un filtre
-# à 180 km / 2h de route — à corriger si besoin, et à mettre à jour si
-# ORIGIN_POSTAL_CODE change.
-FALLBACK_ORIGIN_COORDS = (46.72, -71.28)
+# Nominatim échoue à le géocoder (voir geocode_postal_code : quatre
+# stratégies différentes testées en production le 2026-09-10 n'ont retourné
+# aucune donnée de code postal pour le Canada sur l'instance publique).
+# Saint-Augustin-de-Desmaures, QC (confirmé par le propriétaire) — à mettre
+# à jour si ORIGIN_POSTAL_CODE change.
+FALLBACK_ORIGIN_COORDS = (46.75588, -71.37319)
 
 BASE_DIR = Path(__file__).parent
 STATE_FILE = BASE_DIR / "state.json"
