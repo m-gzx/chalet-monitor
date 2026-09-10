@@ -22,6 +22,7 @@ au besoin (code postal, rayon, temps de route max).
 
 import base64
 import json
+import os
 import time
 import webbrowser
 from pathlib import Path
@@ -427,8 +428,11 @@ def main() -> None:
 
         map_path = build_map_image(origin, new_listings)
         report_path = build_html_report(new_listings, map_path, f"{datetime.now():%Y-%m-%d %H:%M}")
-        webbrowser.open(f"file://{report_path.resolve()}")
-        print(f"{len(new_listings)} nouvelle(s) annonce(s) — rapport ouvert : {report_path}")
+        if not os.environ.get("CI"):
+            # Pas de navigateur à ouvrir sur un runner CI (ex. GitHub Actions) —
+            # le rapport y est plutôt publié via GitHub Pages (voir workflow).
+            webbrowser.open(f"file://{report_path.resolve()}")
+        print(f"{len(new_listings)} nouvelle(s) annonce(s) — rapport généré : {report_path}")
     else:
         print("Aucune nouvelle annonce trouvée.")
 

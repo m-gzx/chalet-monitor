@@ -125,7 +125,31 @@ La première exécution va probablement ouvrir un rapport avec TOUTES les
 annonces existantes (rien n'est encore dans `state.json`). C'est normal —
 les exécutions suivantes ne signaleront que les nouveautés.
 
-## 4. Automatiser avec cron (Mac/Linux)
+## 4. Automatiser avec GitHub Actions (recommandé)
+
+Le dépôt inclut `.github/workflows/monitor.yml` : un workflow qui tourne
+tous les jours (cron `0 12 * * *`, ~7-8h heure de l'Est), exécute
+`monitor.py` sur un runner GitHub, committe l'`state.json` mis à jour dans
+le dépôt (pour se souvenir des annonces déjà vues d'une exécution à
+l'autre) et publie `report.html` sur **GitHub Pages** s'il y a du nouveau.
+
+Étapes pour l'activer (une seule fois) :
+
+1. Pousser ce dépôt sur GitHub (déjà fait si tu lis ceci depuis GitHub).
+2. Dans le dépôt GitHub : **Settings → Pages → Build and deployment →
+   Source**, choisir **GitHub Actions**.
+3. Le workflow tourne automatiquement chaque jour, ou manuellement via
+   l'onglet **Actions → Chalet monitor → Run workflow**.
+4. L'URL du site (visible dans Settings → Pages une fois le premier
+   déploiement fait, ou dans le résumé du run sous "Déploie sur GitHub
+   Pages") affiche le rapport le plus récent. Le site n'est mis à jour que
+   lorsqu'il y a de nouvelles annonces — sinon la dernière version reste en
+   ligne.
+
+Pas besoin de garder un ordinateur allumé ni d'installer quoi que ce soit
+localement pour cette option.
+
+## 4bis. Automatiser avec cron (Mac/Linux, en local)
 
 ```bash
 crontab -e
