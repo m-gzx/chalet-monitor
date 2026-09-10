@@ -27,6 +27,7 @@ import webbrowser
 from pathlib import Path
 
 import requests
+from bs4 import BeautifulSoup
 from staticmap import CircleMarker, StaticMap
 
 # --- CONFIGURATION ---
@@ -73,11 +74,49 @@ def driving_time_minutes(origin: tuple[float, float], dest: tuple[float, float])
         return float("inf")
 
 
+def parse_centris_listing_cards(html: str) -> list[dict]:
+    """
+    Parse le HTML pré-rendu retourné par GetInscriptions (vue "Thumbnail")
+    en une liste de fiches structurées.
+
+    Confirmé le 2026-09-10 sur un échantillon réel : chaque annonce est un
+    bloc `.property-thumbnail-item` contenant, entre autres :
+      - id/MLS : <meta itemprop="sku" content="...">
+      - url : href du <a class="property-thumbnail-summary-link">
+      - prix (nombre brut, sans formatage) : <meta itemprop="price" content="...">
+      - adresse : les <div> à l'intérieur de <div class="address">
+        (rue puis ville, la rue est parfois absente pour un terrain)
+      - lat/lon : attributs data-lat/data-lng du <span class="ll-match-score">
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    listings = []
+    for card in soup.select(".property-thumbnail-item"):
+        link = card.select_one("a.property-thumbnail-summary-link")
+        sku_meta = card.select_one('meta[itemprop="sku"]')
+        price_meta = card.select_one('meta[itemprop="price"]')
+        score_span = card.select_one(".ll-match-score")
+        if link is None or sku_meta is None or score_span is None:
+            continue
+
+        address_div = card.select_one(".address")
+        address_lines = [d.get_text(strip=True) for d in address_div.find_all("div")] if address_div else []
+
+        listings.append({
+            "id": sku_meta["content"],
+            "url": "https://www.centris.ca" + link["href"],
+            "price": int(price_meta["content"]) if price_meta and price_meta.get("content") else None,
+            "address": ", ".join(address_lines) or "Voir l'annonce",
+            "lat": float(score_span["data-lat"]),
+            "lon": float(score_span["data-lng"]),
+        })
+    return listings
+
+
 def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: float) -> list[dict]:
     """
     Interroge l'endpoint interne de recherche Centris (GetInscriptions),
-    capturé par inspection réseau (F12) le 2026-09-10 sur une recherche
-    Chalet + Terrain + Bord de l'eau + Villégiature.
+    capturé et validé par inspection réseau (F12) le 2026-09-10 sur une
+    recherche Chalet + Terrain + Bord de l'eau + Villégiature.
 
     Centris est protégé par Cloudflare : l'appel exige des cookies de
     session (dont `cf_clearance`) obtenus en résolvant un défi JavaScript.
@@ -90,23 +129,18 @@ def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: f
     - Un premier endpoint tenté (GetMarkers, /api/property/map/GetMarkers)
       ne retourne que des clusters de positions pour dessiner la carte, pas
       des annonces individuelles.
-    - GetInscriptions (/Property/GetInscriptions), lui, retourne les
-      fiches d'annonces (vue "Galerie" du site), paginées par 20
-      (`pageSize`/`page`) plutôt que par zone géographique — la requête
-      capturée n'a pas de rayon/bounding box, juste `"region": "Quebec"`
-      (aucune ville précisée dans la barre de recherche du site lors de la
-      capture). On parcourt donc toutes les pages retournées pour "Quebec"
-      et c'est le filtre de temps de route (voir main()) qui réduit
-      ensuite aux propriétés à MAX_DRIVE_HOURS ou moins de ORIGIN_POSTAL_CODE
-      — radius_km n'est donc pas utilisé ici pour l'instant (paramètre
-      conservé pour usage futur si une restriction géographique côté
-      Centris est ajoutée).
-
-    ENCORE À FAIRE : le format exact d'une annonce dans la réponse (clé du
-    tableau, champs id/prix/adresse/url par annonce — la vue est
-    "Thumbnail", donc la réponse contient peut-être du HTML pré-rendu par
-    fiche plutôt que des champs JSON structurés) reste à confirmer sur un
-    échantillon de réponse.
+    - GetInscriptions (/Property/GetInscriptions), lui, retourne (dans
+      `d.Result.html`) le HTML pré-rendu des fiches de la vue "Galerie",
+      paginées par 20 (`pageSize`/`page`) plutôt que par zone géographique
+      — la requête capturée n'a pas de rayon/bounding box, juste
+      `"region": "Quebec"` (aucune ville précisée dans la barre de
+      recherche du site lors de la capture). `d.Result.count` donne le
+      nombre total d'annonces correspondant aux filtres. On parcourt donc
+      toutes les pages pour "Quebec" et c'est le filtre de temps de route
+      (voir main()) qui réduit ensuite aux propriétés à MAX_DRIVE_HOURS ou
+      moins de ORIGIN_POSTAL_CODE — radius_km n'est donc pas utilisé ici
+      pour l'instant (paramètre conservé pour usage futur si une
+      restriction géographique côté Centris est ajoutée).
     """
     from playwright.sync_api import sync_playwright
 
@@ -155,6 +189,7 @@ def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: f
             browser_page = context.new_page()
             browser_page.goto("https://www.centris.ca/fr", wait_until="networkidle", timeout=30000)
 
+            total_count = None
             for page_number in range(1, max_pages + 1):
                 payload = {
                     "mode": "Result",
@@ -172,11 +207,14 @@ def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: f
                         f"Centris a refusé la requête GetInscriptions ({resp.status}) — "
                         "cookies de session ou défi Cloudflare probablement invalides."
                     )
-                body = resp.json()
-                page_listings = body["d"]["Result"]["Inscriptions"]  # TODO: confirmer la clé exacte
+                result = resp.json()["d"]["Result"]
+                total_count = result["count"]
+                page_listings = parse_centris_listing_cards(result["html"])
                 if not page_listings:
                     break
                 listings.extend(page_listings)
+                if len(listings) >= total_count:
+                    break
                 time.sleep(1)  # ménager Centris entre les pages
         finally:
             browser.close()
@@ -210,13 +248,14 @@ def build_html_report(new_listings: list[dict], map_path: Path, generated_at: st
     cards = ""
     for l in new_listings:
         address = l.get("address", "Voir l'annonce")
-        price = l.get("price", "?")
+        price = l.get("price")
+        price_display = f"{price:,}".replace(",", " ") + " $" if price else "Prix non précisé"
         cards += f"""
         <a class="card" href="{l['url']}" target="_blank" rel="noopener">
           <div class="card-body">
             <div class="card-address">{address}</div>
             <div class="card-meta">
-              <span class="price">{price} $</span>
+              <span class="price">{price_display}</span>
               <span class="drive">🚗 {l['drive_minutes']:.0f} min</span>
             </div>
           </div>

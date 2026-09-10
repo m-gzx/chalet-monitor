@@ -21,12 +21,13 @@ rayon de recherche ou le temps de route max, modifier directement les
 constantes en haut de `monitor.py` (`ORIGIN_POSTAL_CODE`, `MAX_DRIVE_HOURS`,
 `SEARCH_RADIUS_KM`).
 
-## 2. Étape importante : ajuster la requête Centris
+## 2. Centris : requête validée — comment faire pareil pour un autre site
 
-Centris n'a pas d'API publique documentée. `monitor.py` contient une
-première tentative basée sur l'endpoint interne `/property/GetInscriptions`,
-mais **il faut la valider avant de l'automatiser**. Voici comment capturer
-la vraie requête avec les outils de développement du navigateur (F12) :
+Centris n'a pas d'API publique documentée, mais `monitor.py` utilise
+maintenant une requête interne **confirmée** par inspection réseau (voir
+section suivante). Si tu veux ajouter DuProprio, uBee, ou re-valider
+Centris après un changement de leur site, voici la marche à suivre avec
+les outils de développement du navigateur (F12) :
 
 ### Marche à suivre générale (Chrome, Edge ou Firefox)
 
@@ -56,24 +57,27 @@ la vraie requête avec les outils de développement du navigateur (F12) :
     si présents) dans une conversation Claude Code pour ajuster
     `search_centris_waterfront_cottages()` avec les bons noms de champs.
 
-### Spécifique à Centris
+### Spécifique à Centris — ✅ validé le 2026-09-10
 
-- ✅ Confirmé (2026-09-10) : l'endpoint est
-  `POST https://www.centris.ca/api/property/map/GetMarkers`, avec la
+- L'endpoint utilisé est `POST https://www.centris.ca/Property/GetInscriptions`
+  (vue "Galerie"), paginé par `page`/`pageSize` (20 par page), avec la
   structure de filtres `FieldsValues` déjà intégrée dans `monitor.py`.
-  Centris est protégé par Cloudflare — `monitor.py` utilise Playwright
+- Un premier essai avec `GetMarkers` (`/api/property/map/GetMarkers`,
+  vue "Carte") s'est avéré être un cul-de-sac : cet endpoint ne retourne
+  que des **clusters** de propriétés (position + nombre regroupé), pas
+  d'annonces individuelles — gardé en historique dans le code/commits
+  mais plus utilisé.
+- La réponse de `GetInscriptions` contient le HTML pré-rendu des fiches
+  (`d.Result.html`) plutôt que des champs JSON — `monitor.py` le parse
+  avec BeautifulSoup (`parse_centris_listing_cards()`) pour en extraire
+  id, prix, adresse, url et coordonnées de chaque annonce.
+- Centris est protégé par Cloudflare — `monitor.py` utilise Playwright
   pour établir une session valide avant d'appeler cet endpoint (voir
   section 1, `playwright install chromium`).
-- ⚠️ **Mais** la réponse de `GetMarkers` (vérifiée le 2026-09-10) ne
-  contient que des **clusters** de propriétés (position + nombre de
-  propriétés regroupées à cet endroit) — pas d'id, prix, adresse ni URL
-  individuels. C'est l'endpoint utilisé pour dessiner les pins sur la
-  carte, pas pour lister des annonces.
-- **Reste à faire** : basculer sur la vue **Galerie** (liste) sur
-  centris.ca (au lieu de "Carte"), Réseau ouvert, et capturer la requête
-  qui charge les fiches individuelles (adresse, prix, url par annonce)
-  de la même façon (F12 → Réseau → Fetch/XHR → clic droit → Copy as
-  cURL, puis onglet **Réponse** pour un échantillon de la réponse).
+- Si Centris change son HTML ou son endpoint dans le futur, refaire la
+  capture avec la marche à suivre générale ci-dessus (viser la vue
+  **Galerie**, pas **Carte**) et ajuster `search_centris_waterfront_cottages()`
+  / `parse_centris_listing_cards()` en conséquence.
 
 ### Spécifique à DuProprio
 
