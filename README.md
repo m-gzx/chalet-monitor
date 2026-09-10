@@ -58,17 +58,22 @@ la vraie requête avec les outils de développement du navigateur (F12) :
 
 ### Spécifique à Centris
 
-- ✅ Confirmé (2026-09-10) : l'endpoint réel est
+- ✅ Confirmé (2026-09-10) : l'endpoint est
   `POST https://www.centris.ca/api/property/map/GetMarkers`, avec la
   structure de filtres `FieldsValues` déjà intégrée dans `monitor.py`.
-- Centris est protégé par Cloudflare — `monitor.py` utilise Playwright
+  Centris est protégé par Cloudflare — `monitor.py` utilise Playwright
   pour établir une session valide avant d'appeler cet endpoint (voir
   section 1, `playwright install chromium`).
-- Il reste à confirmer le **format de la réponse** (les champs par
-  annonce : id, lat/lon, prix, adresse, url). Dans l'onglet Réseau,
-  cliquer sur la requête `GetMarkers` puis sur le sous-onglet
-  **Réponse** (ou **Aperçu**/**Preview**) — pas **En-têtes**/**Headers** —
-  pour voir le JSON retourné.
+- ⚠️ **Mais** la réponse de `GetMarkers` (vérifiée le 2026-09-10) ne
+  contient que des **clusters** de propriétés (position + nombre de
+  propriétés regroupées à cet endroit) — pas d'id, prix, adresse ni URL
+  individuels. C'est l'endpoint utilisé pour dessiner les pins sur la
+  carte, pas pour lister des annonces.
+- **Reste à faire** : basculer sur la vue **Galerie** (liste) sur
+  centris.ca (au lieu de "Carte"), Réseau ouvert, et capturer la requête
+  qui charge les fiches individuelles (adresse, prix, url par annonce)
+  de la même façon (F12 → Réseau → Fetch/XHR → clic droit → Copy as
+  cURL, puis onglet **Réponse** pour un échantillon de la réponse).
 
 ### Spécifique à DuProprio
 

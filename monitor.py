@@ -86,10 +86,21 @@ def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: f
     navigateur), puis on référence la requête POST à travers ce même
     contexte — elle envoie automatiquement les bons cookies.
 
-    ENCORE À FAIRE : le format exact de la réponse (noms des champs par
-    annonce — id, lat/lon, prix, adresse, url) n'a pas encore été confirmé.
-    Le code ci-dessous suppose une liste sous la clé "markers" avec des
-    champs à valider/ajuster une fois un échantillon de réponse examiné.
+    IMPORTANT — réponse confirmée le 2026-09-10 : à un niveau de zoom
+    large (province), GetMarkers ne retourne que des CLUSTERS de
+    propriétés (position + "PointsCount" = nombre de propriétés
+    regroupées à cet endroit), pas des annonces individuelles — aucun id,
+    prix, adresse ni URL. C'est l'endpoint utilisé pour dessiner les pins
+    sur la carte, pas pour lister des annonces.
+
+    -> CETTE FONCTION EST DONC INCOMPLÈTE : il manque encore la requête
+    qui retourne les annonces individuelles avec leurs détails. Elle se
+    déclenche probablement en passant à la vue "Galerie" (liste) sur
+    centris.ca plutôt que "Carte" — à capturer de la même façon (F12 →
+    Réseau → Fetch/XHR) et à ajouter ici, ou à remplacer cette requête par
+    un niveau de zoom assez élevé pour que les clusters se dissolvent en
+    pins individuels (si chaque pin individuel contient alors un id
+    exploitable pour aller chercher les détails).
     """
     from playwright.sync_api import sync_playwright
 
@@ -159,7 +170,7 @@ def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: f
         finally:
             browser.close()
 
-    return body.get("markers", [])  # TODO: confirmer la vraie clé/structure de la réponse
+    return body["d"]["Result"]["Markers"]  # clusters uniquement, voir note ci-dessus
 
 
 def load_state() -> set[str]:
