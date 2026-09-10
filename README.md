@@ -9,7 +9,12 @@ bord de l'eau, à 2h de route ou moins de G3A2P8, et ouvre un rapport HTML
 ```bash
 cd chalet-monitor
 pip install -r requirements.txt
+playwright install chromium
 ```
+
+La deuxième commande télécharge un navigateur Chromium headless
+(~150-300 Mo, une seule fois) — utilisé pour obtenir une session Centris
+valide face à sa protection Cloudflare (voir section 2).
 
 Aucun secret/compte courriel requis. Pour ajuster le point de départ, le
 rayon de recherche ou le temps de route max, modifier directement les
@@ -53,11 +58,17 @@ la vraie requête avec les outils de développement du navigateur (F12) :
 
 ### Spécifique à Centris
 
-- L'endpoint actuel dans le code (`/property/GetInscriptions`) est une
-  hypothèse à confirmer — le vrai nom peut différer.
-- Le filtre "bord de l'eau" correspond probablement à une valeur précise
-  dans une liste de caractéristiques (`characteristics`) — à repérer dans
-  le payload une fois une recherche filtrée faite sur le site.
+- ✅ Confirmé (2026-09-10) : l'endpoint réel est
+  `POST https://www.centris.ca/api/property/map/GetMarkers`, avec la
+  structure de filtres `FieldsValues` déjà intégrée dans `monitor.py`.
+- Centris est protégé par Cloudflare — `monitor.py` utilise Playwright
+  pour établir une session valide avant d'appeler cet endpoint (voir
+  section 1, `playwright install chromium`).
+- Il reste à confirmer le **format de la réponse** (les champs par
+  annonce : id, lat/lon, prix, adresse, url). Dans l'onglet Réseau,
+  cliquer sur la requête `GetMarkers` puis sur le sous-onglet
+  **Réponse** (ou **Aperçu**/**Preview**) — pas **En-têtes**/**Headers** —
+  pour voir le JSON retourné.
 
 ### Spécifique à DuProprio
 

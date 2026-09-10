@@ -13,7 +13,9 @@ Flux :
   5. Génère un rapport HTML autonome (carte + fiches cliquables) et
      l'ouvre dans le navigateur par défaut.
 
-Nécessite : pip install -r requirements.txt
+Nécessite : pip install -r requirements.txt puis, une seule fois,
+"playwright install chromium" (utilisé pour obtenir une session Centris
+valide face à Cloudflare — voir search_centris_waterfront_cottages()).
 Aucune configuration/secret requis — ajuster les constantes ci-dessous
 au besoin (code postal, rayon, temps de route max).
 """
@@ -77,19 +79,20 @@ def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: f
     par inspection réseau (F12) le 2026-09-10 sur une recherche
     Chalet + Terrain + Bord de l'eau + Villégiature.
 
-    ATTENTION — Cloudflare : Centris est protégé par Cloudflare. La requête
-    capturée incluait des cookies de session (dont `cf_clearance`), obtenus
-    en résolvant un défi JavaScript qu'un simple `requests.post()` ne peut
-    pas faire. Sans session valide, cet appel risque de recevoir un 403 au
-    lieu du JSON attendu — surtout après expiration du cookie (quelques
-    heures à quelques jours). Voir la note dans le README sur l'option
-    Playwright pour obtenir une session valide avant chaque exécution.
+    Centris est protégé par Cloudflare : l'appel exige des cookies de
+    session (dont `cf_clearance`) obtenus en résolvant un défi JavaScript.
+    On utilise donc Playwright pour ouvrir une vraie page Centris une
+    première fois (ce qui établit ces cookies dans le contexte du
+    navigateur), puis on référence la requête POST à travers ce même
+    contexte — elle envoie automatiquement les bons cookies.
 
     ENCORE À FAIRE : le format exact de la réponse (noms des champs par
     annonce — id, lat/lon, prix, adresse, url) n'a pas encore été confirmé.
     Le code ci-dessous suppose une liste sous la clé "markers" avec des
     champs à valider/ajuster une fois un échantillon de réponse examiné.
     """
+    from playwright.sync_api import sync_playwright
+
     url = "https://www.centris.ca/api/property/map/GetMarkers"
     lat, lon = origin
     delta = radius_km / 111  # ~111 km par degré de latitude
@@ -130,11 +133,32 @@ def search_centris_waterfront_cottages(origin: tuple[float, float], radius_km: f
         "content-type": "application/json; charset=UTF-8",
         "accept": "application/json, text/javascript, */*; q=0.01",
         "x-requested-with": "XMLHttpRequest",
+        "referer": "https://www.centris.ca/fr/propriete~a-vendre?view=Map",
     }
 
-    resp = requests.post(url, json=payload, headers=headers, timeout=15)
-    resp.raise_for_status()
-    body = resp.json()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                )
+            )
+            # Établit la session (cookies Cloudflare inclus) avant l'appel API.
+            page = context.new_page()
+            page.goto("https://www.centris.ca/fr", wait_until="networkidle", timeout=30000)
+
+            resp = context.request.post(url, data=json.dumps(payload), headers=headers, timeout=15000)
+            if not resp.ok:
+                raise RuntimeError(
+                    f"Centris a refusé la requête GetMarkers ({resp.status}) — "
+                    "cookies de session ou défi Cloudflare probablement invalides."
+                )
+            body = resp.json()
+        finally:
+            browser.close()
+
     return body.get("markers", [])  # TODO: confirmer la vraie clé/structure de la réponse
 
 
