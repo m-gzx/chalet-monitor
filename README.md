@@ -1,11 +1,12 @@
 # Moniteur de chalets bord de l'eau
 
 Surveille automatiquement les inscriptions de chalets à vendre, bord de
-l'eau, à 2h de route ou moins de G3A2P8, et génère un rapport HTML (carte +
-fiches cliquables) avec un historique roulant des 5 derniers jours,
-navigable avec des flèches précédent/suivant. Pas de notion d'annonce
-"déjà vue" : une annonce reste visible tant qu'elle est encore trouvée par
-la recherche, peu importe si elle a déjà figuré dans un rapport précédent.
+l'eau, à 2h de route ou moins de G3A2P8, et génère un rapport HTML (carte
+interactive avec points cliquables + fiches) avec un historique roulant
+des 5 derniers jours, navigable avec des flèches précédent/suivant. Pas de
+notion d'annonce "déjà vue" : une annonce reste visible tant qu'elle est
+encore trouvée par la recherche, peu importe si elle a déjà figuré dans un
+rapport précédent.
 
 ## 1. Installation (à faire une fois, dans Claude Code)
 
@@ -181,12 +182,17 @@ peut être ouvert manuellement au retour.
 4. Ajoute le jour courant à `history.json` (remplace l'entrée du jour si le
    script est relancé le même jour) et ne garde que les `HISTORY_DAYS`
    jours les plus récents.
-5. Construit un rapport HTML autonome (`report.html`, une carte + des
-   fiches cliquables par jour, paginé avec des flèches précédent/suivant)
-   et l'ouvre dans le navigateur par défaut.
+5. Construit un rapport HTML autonome (`report.html`, une carte
+   interactive Leaflet/OpenStreetMap partagée entre les jours — cliquer
+   sur un point ouvre un popup avec adresse/prix/temps de route et un
+   lien vers l'annonce — plus des fiches cliquables par jour, paginé avec
+   des flèches précédent/suivant) et l'ouvre dans le navigateur par défaut.
 
 ## Notes
 
+- La carte du rapport charge Leaflet et les tuiles OpenStreetMap depuis
+  un CDN à l'ouverture de la page — une connexion internet est donc
+  nécessaire pour la voir (mais pas pour consulter les fiches en dessous).
 - Le service de temps de route utilisé (OSRM, serveur public de démo)
   est gratuit mais partagé — éviter les vérifications trop fréquentes
   (1x/jour est raisonnable).
