@@ -501,11 +501,8 @@ def build_html_report(origin: tuple[float, float], history: list[dict], generate
 <head>
 <meta charset="utf-8">
 <title>Chalets bord de l'eau</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-  integrity="sha512-BB3hKbKWOc9Ez/TAwyWxNXeoV9c1v6FIeYiBieIWkpLjauysF18NzgR1MBNBXf8/KABdlkX68nAhlwcDFLGPCQ=="
-  crossorigin=""></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root {{ color-scheme: light dark; }}
   body {{
@@ -567,15 +564,24 @@ def build_html_report(origin: tuple[float, float], history: list[dict], generate
     const nextBtn = document.getElementById('nextBtn');
     let current = 0; // 0 = le plus récent
 
-    const map = L.map('map').setView(ORIGIN, 9);
-    L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-      maxZoom: 18,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }}).addTo(map);
-    L.circleMarker(ORIGIN, {{radius: 8, color: '#2563eb', fillColor: '#2563eb', fillOpacity: 1}})
-      .addTo(map)
-      .bindTooltip('Point de départ');
-    const markersLayer = L.layerGroup().addTo(map);
+    // Si Leaflet n'a pas pu se charger (CDN indisponible, bloqueur de
+    // contenu, etc.), afficher un message plutôt qu'un rectangle vide et
+    // silencieux — les fiches en dessous restent consultables sans la carte.
+    let markersLayer = null;
+    if (typeof L === 'undefined') {{
+      document.getElementById('map').textContent =
+        "Carte indisponible (connexion internet requise pour charger Leaflet/OpenStreetMap).";
+    }} else {{
+      const map = L.map('map').setView(ORIGIN, 9);
+      L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        maxZoom: 18,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }}).addTo(map);
+      L.circleMarker(ORIGIN, {{radius: 8, color: '#2563eb', fillColor: '#2563eb', fillOpacity: 1}})
+        .addTo(map)
+        .bindTooltip('Point de départ');
+      markersLayer = L.layerGroup().addTo(map);
+    }}
 
     function popupContent(l) {{
       const priceText = l.price ? l.price.toLocaleString('fr-CA') + ' $' : 'Prix non précisé';
@@ -597,6 +603,7 @@ def build_html_report(origin: tuple[float, float], history: list[dict], generate
     }}
 
     function renderMarkers(index) {{
+      if (!markersLayer) return;
       markersLayer.clearLayers();
       for (const l of DAYS[index]) {{
         L.circleMarker([l.lat, l.lon], {{radius: 7, color: '#dc2626', fillColor: '#dc2626', fillOpacity: 0.85}})
