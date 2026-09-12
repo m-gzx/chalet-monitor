@@ -12,8 +12,9 @@ Flux :
      HISTORY_DAYS derniers jours — pas de notion d'annonce "déjà vue", une
      annonce reste visible tant qu'elle est encore trouvée par la
      recherche).
-  5. Génère un rapport HTML autonome (carte + fiches cliquables, paginé
-     par jour) et l'ouvre dans le navigateur par défaut.
+  5. Génère un rapport HTML autonome (carte interactive avec points
+     cliquables + fiches, paginé par jour) et l'ouvre dans le navigateur
+     par défaut.
 
 Nécessite : pip install -r requirements.txt puis, une seule fois,
 "playwright install chromium" (utilisé pour obtenir une session Centris
@@ -22,8 +23,6 @@ Aucune configuration/secret requis — ajuster les constantes ci-dessous
 au besoin (code postal, rayon, temps de route max).
 """
 
-import base64
-import io
 import json
 import math
 import os
@@ -34,7 +33,6 @@ from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
-from staticmap import CircleMarker, StaticMap
 
 # --- CONFIGURATION ---
 ORIGIN_POSTAL_CODE = "G3A2P8"
@@ -409,17 +407,6 @@ def save_history(history: list[dict]) -> None:
     HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False))
 
 
-def render_map_data_uri(origin: tuple[float, float], listings: list[dict]) -> str:
-    m = StaticMap(800, 500)
-    m.add_marker(CircleMarker((origin[1], origin[0]), "#2563eb", 14))  # point de départ
-    for listing in listings:
-        m.add_marker(CircleMarker((listing["lon"], listing["lat"]), "#dc2626", 12))
-    image = m.render()
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-
-
 FRENCH_WEEKDAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 FRENCH_MONTHS = [
     "janvier", "février", "mars", "avril", "mai", "juin",
@@ -442,21 +429,28 @@ def build_html_report(origin: tuple[float, float], history: list[dict], generate
     annonces trouvées ce jour-là dans le rayon/temps de route configurés,
     qu'elles aient déjà figuré dans un rapport précédent ou non — voir
     history.json (remplace l'ancien state.json) pour le stockage.
+
+    La carte est une carte interactive Leaflet/OpenStreetMap (chargée par
+    CDN) plutôt qu'une image statique : les points sont cliquables et
+    ouvrent un popup (adresse, prix, temps de route, lien vers l'annonce).
+    Une seule instance de carte est partagée entre les jours — ses
+    marqueurs sont remplacés en JS au changement de page plutôt que de
+    générer une image par jour.
     """
     # Page la plus récente en premier (history est trié du plus vieux au plus récent).
     days = list(reversed(history))
     today_iso = date.today().isoformat()
 
     pages_html = ""
+    day_labels = []
     for i, day in enumerate(days):
         listings = day["listings"]
         label = format_date_fr(day["date"])
         if day["date"] == today_iso:
             label = f"Aujourd'hui — {label}"
+        day_labels.append(f"{label} — {len(listings)} annonce(s)")
 
         if listings:
-            map_data_uri = render_map_data_uri(origin, listings)
-            map_html = f'<img class="map" src="{map_data_uri}" alt="Carte des chalets trouvés">'
             cards = ""
             for l in listings:
                 address = l.get("address", "Voir l'annonce")
@@ -474,20 +468,44 @@ def build_html_report(origin: tuple[float, float], history: list[dict], generate
         </a>"""
             body_html = f'<div class="grid">{cards}</div>'
         else:
-            map_html = ""
             body_html = '<p class="empty">Aucune annonce trouvée ce jour-là.</p>'
 
         pages_html += f"""
-    <section class="page" data-label="{label} — {len(listings)} annonce(s)" {"hidden" if i != 0 else ""}>
-      {map_html}
+    <section class="page" {"hidden" if i != 0 else ""}>
       {body_html}
     </section>"""
+
+    # Un seul point (lat, lon, adresse, prix, temps de route, url) par annonce,
+    # par jour — sert à peupler les marqueurs de la carte partagée en JS.
+    days_json = json.dumps(
+        [
+            [
+                {
+                    "lat": l["lat"],
+                    "lon": l["lon"],
+                    "address": l.get("address", "Voir l'annonce"),
+                    "price": l.get("price"),
+                    "drive_minutes": l["drive_minutes"],
+                    "url": l["url"],
+                }
+                for l in day["listings"]
+            ]
+            for day in days
+        ],
+        ensure_ascii=False,
+    ).replace("</", "<\\/")  # évite une fermeture accidentelle de la balise <script>
+    labels_json = json.dumps(day_labels, ensure_ascii=False).replace("</", "<\\/")
 
     html = f"""<!doctype html>
 <html lang="fr">
 <head>
 <meta charset="utf-8">
 <title>Chalets bord de l'eau</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha512-BB3hKbKWOc9Ez/TAwyWxNXeoV9c1v6FIeYiBieIWkpLjauysF18NzgR1MBNBXf8/KABdlkX68nAhlwcDFLGPCQ=="
+  crossorigin=""></script>
 <style>
   :root {{ color-scheme: light dark; }}
   body {{
@@ -506,7 +524,12 @@ def build_html_report(origin: tuple[float, float], history: list[dict], generate
   }}
   .nav button:disabled {{ opacity: 0.35; cursor: default; }}
   .nav .day-label {{ font-weight: 600; }}
-  .map {{ width: 100%; border-radius: 12px; border: 1px solid #d6d3d1; display: block; margin-bottom: 24px; }}
+  #map {{
+    width: 100%; height: 380px; border-radius: 12px; border: 1px solid #d6d3d1;
+    margin-bottom: 24px; background: #e7e5e4;
+  }}
+  .leaflet-popup-content {{ font-family: inherit; font-size: 0.9rem; }}
+  .leaflet-popup-content a {{ color: #2563eb; }}
   .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }}
   .card {{
     display: block; background: white; border: 1px solid #e7e5e4; border-radius: 10px;
@@ -529,21 +552,65 @@ def build_html_report(origin: tuple[float, float], history: list[dict], generate
       <span class="day-label" id="dayLabel"></span>
       <button id="nextBtn" aria-label="Jour suivant">›</button>
     </div>
+    <div id="map"></div>
     {pages_html}
     <footer>chalet-monitor · historique roulant des {HISTORY_DAYS} derniers jours</footer>
   </div>
   <script>
+    const ORIGIN = [{origin[0]}, {origin[1]}];
+    const DAYS = {days_json};      // un tableau de listings par jour
+    const DAY_LABELS = {labels_json};
+
     const pages = Array.from(document.querySelectorAll('.page'));
     const dayLabel = document.getElementById('dayLabel');
     const prevBtn = document.getElementById('prevBtn');
     const nextBtn = document.getElementById('nextBtn');
     let current = 0; // 0 = le plus récent
 
+    const map = L.map('map').setView(ORIGIN, 9);
+    L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+      maxZoom: 18,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }}).addTo(map);
+    L.circleMarker(ORIGIN, {{radius: 8, color: '#2563eb', fillColor: '#2563eb', fillOpacity: 1}})
+      .addTo(map)
+      .bindTooltip('Point de départ');
+    const markersLayer = L.layerGroup().addTo(map);
+
+    function popupContent(l) {{
+      const priceText = l.price ? l.price.toLocaleString('fr-CA') + ' $' : 'Prix non précisé';
+      const div = document.createElement('div');
+      const addr = document.createElement('div');
+      addr.style.fontWeight = '600';
+      addr.textContent = l.address;
+      div.appendChild(addr);
+      const meta = document.createElement('div');
+      meta.textContent = `${{priceText}} · 🚗 ${{Math.round(l.drive_minutes)}} min`;
+      div.appendChild(meta);
+      const link = document.createElement('a');
+      link.href = l.url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = "Voir l'annonce ↗";
+      div.appendChild(link);
+      return div;
+    }}
+
+    function renderMarkers(index) {{
+      markersLayer.clearLayers();
+      for (const l of DAYS[index]) {{
+        L.circleMarker([l.lat, l.lon], {{radius: 7, color: '#dc2626', fillColor: '#dc2626', fillOpacity: 0.85}})
+          .addTo(markersLayer)
+          .bindPopup(popupContent(l));
+      }}
+    }}
+
     function render() {{
       pages.forEach((p, i) => p.hidden = i !== current);
-      dayLabel.textContent = `${{pages[current].dataset.label}} (${{current + 1}}/${{pages.length}})`;
+      dayLabel.textContent = `${{DAY_LABELS[current]}} (${{current + 1}}/${{pages.length}})`;
       prevBtn.disabled = current >= pages.length - 1; // précédent = jour plus vieux
       nextBtn.disabled = current <= 0; // suivant = jour plus récent
+      renderMarkers(current);
     }}
     prevBtn.addEventListener('click', () => {{ if (current < pages.length - 1) {{ current++; render(); }} }});
     nextBtn.addEventListener('click', () => {{ if (current > 0) {{ current--; render(); }} }});
