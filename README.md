@@ -1,8 +1,11 @@
 # Moniteur de chalets bord de l'eau
 
-Surveille automatiquement les nouvelles inscriptions de chalets à vendre,
-bord de l'eau, à 2h de route ou moins de G3A2P8, et ouvre un rapport HTML
-(carte + fiches cliquables) dans le navigateur dès qu'il y a du nouveau.
+Surveille automatiquement les inscriptions de chalets à vendre, bord de
+l'eau, à 2h de route ou moins de G3A2P8, et génère un rapport HTML (carte +
+fiches cliquables) avec un historique roulant des 5 derniers jours,
+navigable avec des flèches précédent/suivant. Pas de notion d'annonce
+"déjà vue" : une annonce reste visible tant qu'elle est encore trouvée par
+la recherche, peu importe si elle a déjà figuré dans un rapport précédent.
 
 ## 1. Installation (à faire une fois, dans Claude Code)
 
@@ -121,17 +124,19 @@ l'API — je peux réécrire cette partie si tu préfères cette avenue.
 python monitor.py
 ```
 
-La première exécution va probablement ouvrir un rapport avec TOUTES les
-annonces existantes (rien n'est encore dans `state.json`). C'est normal —
-les exécutions suivantes ne signaleront que les nouveautés.
+Chaque exécution ouvre un rapport avec toutes les annonces trouvées ce
+jour-là, plus les jours précédents déjà dans `history.json` (jusqu'à
+`HISTORY_DAYS`, 5 par défaut) — naviguer entre les jours avec les flèches
+précédent/suivant en haut du rapport.
 
 ## 4. Automatiser avec GitHub Actions (recommandé)
 
 Le dépôt inclut `.github/workflows/monitor.yml` : un workflow qui tourne
 tous les jours (cron `0 12 * * *`, ~7-8h heure de l'Est), exécute
-`monitor.py` sur un runner GitHub, committe l'`state.json` mis à jour dans
-le dépôt (pour se souvenir des annonces déjà vues d'une exécution à
-l'autre) et publie `report.html` sur **GitHub Pages** s'il y a du nouveau.
+`monitor.py` sur un runner GitHub, committe l'`history.json` mis à jour
+dans le dépôt (l'historique roulant des `HISTORY_DAYS` derniers jours) et
+publie `report.html` sur **GitHub Pages** — à chaque run, le site affiche
+le rapport paginé le plus à jour.
 
 Étapes pour l'activer (une seule fois) :
 
@@ -142,9 +147,8 @@ l'autre) et publie `report.html` sur **GitHub Pages** s'il y a du nouveau.
    l'onglet **Actions → Chalet monitor → Run workflow**.
 4. L'URL du site (visible dans Settings → Pages une fois le premier
    déploiement fait, ou dans le résumé du run sous "Déploie sur GitHub
-   Pages") affiche le rapport le plus récent. Le site n'est mis à jour que
-   lorsqu'il y a de nouvelles annonces — sinon la dernière version reste en
-   ligne.
+   Pages") affiche le rapport, avec des flèches précédent/suivant pour
+   naviguer entre les derniers jours.
 
 Pas besoin de garder un ordinateur allumé ni d'installer quoi que ce soit
 localement pour cette option.
@@ -174,19 +178,22 @@ peut être ouvert manuellement au retour.
 1. Géocode G3A2P8.
 2. Cherche les chalets bord de l'eau dans un rayon large autour de ce point.
 3. Filtre par **temps de route réel** (≤ 2h) via OSRM, pas juste à vol d'oiseau.
-4. Compare avec `state.json` (annonces déjà vues).
-5. S'il y a du nouveau : génère une image de carte (`map.png`), construit
-   un rapport HTML autonome (`report.html`, carte + fiches cliquables avec
-   adresse, prix et temps de route) et l'ouvre dans le navigateur par défaut.
-6. Met à jour `state.json`.
+4. Ajoute le jour courant à `history.json` (remplace l'entrée du jour si le
+   script est relancé le même jour) et ne garde que les `HISTORY_DAYS`
+   jours les plus récents.
+5. Construit un rapport HTML autonome (`report.html`, une carte + des
+   fiches cliquables par jour, paginé avec des flèches précédent/suivant)
+   et l'ouvre dans le navigateur par défaut.
 
 ## Notes
 
 - Le service de temps de route utilisé (OSRM, serveur public de démo)
   est gratuit mais partagé — éviter les vérifications trop fréquentes
   (1x/jour est raisonnable).
-- Pour ajouter DuProprio ou uBee en plus de Centris, il faudrait une
-  fonction de recherche additionnelle par site, similaire à
+- Pour ajouter DuProprio en plus de Centris et uBee, il faudrait une
+  fonction de recherche additionnelle, similaire à
   `search_centris_waterfront_cottages()` (voir section 2 ci-dessus).
-- `report.html` et `map.png` sont régénérés à chaque exécution avec du
-  nouveau — ils ne sont pas versionnés dans Git (voir `.gitignore`).
+- `report.html` est régénéré à chaque exécution — il n'est pas versionné
+  dans Git (voir `.gitignore`). `history.json`, lui, l'est : c'est ce qui
+  permet à `HISTORY_DAYS` jours de survivre d'une exécution à l'autre sur
+  un runner GitHub Actions éphémère.
