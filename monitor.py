@@ -8,10 +8,12 @@ Flux :
      de ce point, avec le filtre "bord de l'eau".
   3. Filtre les résultats par temps de route réel (via OSRM), pas juste
      à vol d'oiseau.
-  4. Compare avec les annonces déjà vues (state.json) pour ne garder que
-     les nouvelles.
-  5. Génère un rapport HTML autonome (carte + fiches cliquables) et
-     l'ouvre dans le navigateur par défaut.
+  4. Ajoute le jour courant à l'historique roulant (history.json, les
+     HISTORY_DAYS derniers jours — pas de notion d'annonce "déjà vue", une
+     annonce reste visible tant qu'elle est encore trouvée par la
+     recherche).
+  5. Génère un rapport HTML autonome (carte + fiches cliquables, paginé
+     par jour) et l'ouvre dans le navigateur par défaut.
 
 Nécessite : pip install -r requirements.txt puis, une seule fois,
 "playwright install chromium" (utilisé pour obtenir une session Centris
@@ -21,11 +23,13 @@ au besoin (code postal, rayon, temps de route max).
 """
 
 import base64
+import io
 import json
 import math
 import os
 import time
 import webbrowser
+from datetime import date, datetime
 from pathlib import Path
 
 import requests
@@ -36,6 +40,7 @@ from staticmap import CircleMarker, StaticMap
 ORIGIN_POSTAL_CODE = "G3A2P8"
 MAX_DRIVE_HOURS = 2.0
 SEARCH_RADIUS_KM = 180  # rayon large à vol d'oiseau, filtré ensuite par temps de route réel
+HISTORY_DAYS = 5  # nombre de jours conservés dans l'historique roulant du rapport
 
 # Coordonnées de secours pour ORIGIN_POSTAL_CODE, utilisées seulement si
 # Nominatim échoue à le géocoder (voir geocode_postal_code : quatre
@@ -46,8 +51,7 @@ SEARCH_RADIUS_KM = 180  # rayon large à vol d'oiseau, filtré ensuite par temps
 FALLBACK_ORIGIN_COORDS = (46.75588, -71.37319)
 
 BASE_DIR = Path(__file__).parent
-STATE_FILE = BASE_DIR / "state.json"
-MAP_FILE = BASE_DIR / "map.png"
+HISTORY_FILE = BASE_DIR / "history.json"
 REPORT_FILE = BASE_DIR / "report.html"
 
 
@@ -395,35 +399,70 @@ def search_ubee_waterfront_cottages(origin: tuple[float, float], radius_km: floa
     return listings
 
 
-def load_state() -> set[str]:
-    if STATE_FILE.exists():
-        return set(json.loads(STATE_FILE.read_text()))
-    return set()
+def load_history() -> list[dict]:
+    if HISTORY_FILE.exists():
+        return json.loads(HISTORY_FILE.read_text())
+    return []
 
 
-def save_state(seen_ids: set[str]) -> None:
-    STATE_FILE.write_text(json.dumps(sorted(seen_ids)))
+def save_history(history: list[dict]) -> None:
+    HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False))
 
 
-def build_map_image(origin: tuple[float, float], listings: list[dict]) -> Path:
+def render_map_data_uri(origin: tuple[float, float], listings: list[dict]) -> str:
     m = StaticMap(800, 500)
     m.add_marker(CircleMarker((origin[1], origin[0]), "#2563eb", 14))  # point de départ
     for listing in listings:
         m.add_marker(CircleMarker((listing["lon"], listing["lat"]), "#dc2626", 12))
     image = m.render()
-    image.save(str(MAP_FILE))
-    return MAP_FILE
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def build_html_report(new_listings: list[dict], map_path: Path, generated_at: str) -> Path:
-    map_data_uri = "data:image/png;base64," + base64.b64encode(map_path.read_bytes()).decode()
+FRENCH_WEEKDAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+FRENCH_MONTHS = [
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+]
 
-    cards = ""
-    for l in new_listings:
-        address = l.get("address", "Voir l'annonce")
-        price = l.get("price")
-        price_display = f"{price:,}".replace(",", " ") + " $" if price else "Prix non précisé"
-        cards += f"""
+
+def format_date_fr(iso_date: str) -> str:
+    d = date.fromisoformat(iso_date)
+    return f"{FRENCH_WEEKDAYS[d.weekday()]} {d.day} {FRENCH_MONTHS[d.month - 1]} {d.year}"
+
+
+def build_html_report(origin: tuple[float, float], history: list[dict], generated_at: str) -> Path:
+    """
+    Construit un rapport HTML autonome avec un historique roulant des
+    HISTORY_DAYS derniers jours, paginé (une page par jour, navigable avec
+    des flèches précédent/suivant côté client).
+
+    Pas de notion d'annonce "déjà vue" : chaque jour montre toutes les
+    annonces trouvées ce jour-là dans le rayon/temps de route configurés,
+    qu'elles aient déjà figuré dans un rapport précédent ou non — voir
+    history.json (remplace l'ancien state.json) pour le stockage.
+    """
+    # Page la plus récente en premier (history est trié du plus vieux au plus récent).
+    days = list(reversed(history))
+    today_iso = date.today().isoformat()
+
+    pages_html = ""
+    for i, day in enumerate(days):
+        listings = day["listings"]
+        label = format_date_fr(day["date"])
+        if day["date"] == today_iso:
+            label = f"Aujourd'hui — {label}"
+
+        if listings:
+            map_data_uri = render_map_data_uri(origin, listings)
+            map_html = f'<img class="map" src="{map_data_uri}" alt="Carte des chalets trouvés">'
+            cards = ""
+            for l in listings:
+                address = l.get("address", "Voir l'annonce")
+                price = l.get("price")
+                price_display = f"{price:,}".replace(",", " ") + " $" if price else "Prix non précisé"
+                cards += f"""
         <a class="card" href="{l['url']}" target="_blank" rel="noopener">
           <div class="card-body">
             <div class="card-address">{address}</div>
@@ -433,6 +472,16 @@ def build_html_report(new_listings: list[dict], map_path: Path, generated_at: st
             </div>
           </div>
         </a>"""
+            body_html = f'<div class="grid">{cards}</div>'
+        else:
+            map_html = ""
+            body_html = '<p class="empty">Aucune annonce trouvée ce jour-là.</p>'
+
+        pages_html += f"""
+    <section class="page" data-label="{label} — {len(listings)} annonce(s)" {"hidden" if i != 0 else ""}>
+      {map_html}
+      {body_html}
+    </section>"""
 
     html = f"""<!doctype html>
 <html lang="fr">
@@ -447,7 +496,16 @@ def build_html_report(new_listings: list[dict], map_path: Path, generated_at: st
   }}
   .wrap {{ max-width: 900px; margin: 0 auto; }}
   h1 {{ font-size: 1.4rem; margin: 0 0 4px; }}
-  .subtitle {{ color: #57534e; margin: 0 0 20px; font-size: 0.9rem; }}
+  .subtitle {{ color: #57534e; margin: 0 0 16px; font-size: 0.9rem; }}
+  .nav {{
+    display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+  }}
+  .nav button {{
+    font: inherit; font-size: 1.1rem; width: 36px; height: 36px; border-radius: 999px;
+    border: 1px solid #d6d3d1; background: white; cursor: pointer;
+  }}
+  .nav button:disabled {{ opacity: 0.35; cursor: default; }}
+  .nav .day-label {{ font-weight: 600; }}
   .map {{ width: 100%; border-radius: 12px; border: 1px solid #d6d3d1; display: block; margin-bottom: 24px; }}
   .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }}
   .card {{
@@ -458,19 +516,39 @@ def build_html_report(new_listings: list[dict], map_path: Path, generated_at: st
   .card-address {{ font-weight: 600; margin-bottom: 8px; }}
   .card-meta {{ display: flex; justify-content: space-between; font-size: 0.9rem; color: #44403c; }}
   .price {{ font-weight: 600; color: #15803d; }}
+  .empty {{ color: #78716c; font-style: italic; }}
   footer {{ margin-top: 24px; font-size: 0.8rem; color: #78716c; }}
 </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>🏡 {len(new_listings)} nouveau(x) chalet(s) bord de l'eau</h1>
+    <h1>🏡 Chalets bord de l'eau</h1>
     <p class="subtitle">{MAX_DRIVE_HOURS:.0f}h de route max de {ORIGIN_POSTAL_CODE} — généré le {generated_at}</p>
-    <img class="map" src="{map_data_uri}" alt="Carte des chalets trouvés">
-    <div class="grid">
-      {cards}
+    <div class="nav">
+      <button id="prevBtn" aria-label="Jour précédent">‹</button>
+      <span class="day-label" id="dayLabel"></span>
+      <button id="nextBtn" aria-label="Jour suivant">›</button>
     </div>
-    <footer>chalet-monitor · rapport régénéré à chaque nouvelle trouvaille</footer>
+    {pages_html}
+    <footer>chalet-monitor · historique roulant des {HISTORY_DAYS} derniers jours</footer>
   </div>
+  <script>
+    const pages = Array.from(document.querySelectorAll('.page'));
+    const dayLabel = document.getElementById('dayLabel');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    let current = 0; // 0 = le plus récent
+
+    function render() {{
+      pages.forEach((p, i) => p.hidden = i !== current);
+      dayLabel.textContent = `${{pages[current].dataset.label}} (${{current + 1}}/${{pages.length}})`;
+      prevBtn.disabled = current >= pages.length - 1; // précédent = jour plus vieux
+      nextBtn.disabled = current <= 0; // suivant = jour plus récent
+    }}
+    prevBtn.addEventListener('click', () => {{ if (current < pages.length - 1) {{ current++; render(); }} }});
+    nextBtn.addEventListener('click', () => {{ if (current > 0) {{ current--; render(); }} }});
+    render();
+  </script>
 </body>
 </html>"""
 
@@ -480,7 +558,6 @@ def build_html_report(new_listings: list[dict], map_path: Path, generated_at: st
 
 def main() -> None:
     origin = geocode_postal_code(ORIGIN_POSTAL_CODE)
-    seen_ids = load_state()
 
     print(f"Origine ({ORIGIN_POSTAL_CODE}) géocodée à {origin}.")
 
@@ -513,23 +590,18 @@ def main() -> None:
             candidates.append(listing)
     print(f"{len(candidates)} annonce(s) à {MAX_DRIVE_HOURS:.0f}h de route ou moins.")
 
-    new_listings = [l for l in candidates if l["id"] not in seen_ids]
+    today_iso = date.today().isoformat()
+    history = [day for day in load_history() if day["date"] != today_iso]  # remplace un run précédent du jour
+    history.append({"date": today_iso, "listings": candidates})
+    history = history[-HISTORY_DAYS:]
+    save_history(history)
 
-    if new_listings:
-        from datetime import datetime
-
-        map_path = build_map_image(origin, new_listings)
-        report_path = build_html_report(new_listings, map_path, f"{datetime.now():%Y-%m-%d %H:%M}")
-        if not os.environ.get("CI"):
-            # Pas de navigateur à ouvrir sur un runner CI (ex. GitHub Actions) —
-            # le rapport y est plutôt publié via GitHub Pages (voir workflow).
-            webbrowser.open(f"file://{report_path.resolve()}")
-        print(f"{len(new_listings)} nouvelle(s) annonce(s) — rapport généré : {report_path}")
-    else:
-        print("Aucune nouvelle annonce trouvée.")
-
-    seen_ids.update(l["id"] for l in candidates)
-    save_state(seen_ids)
+    report_path = build_html_report(origin, history, f"{datetime.now():%Y-%m-%d %H:%M}")
+    if not os.environ.get("CI"):
+        # Pas de navigateur à ouvrir sur un runner CI (ex. GitHub Actions) —
+        # le rapport y est plutôt publié via GitHub Pages (voir workflow).
+        webbrowser.open(f"file://{report_path.resolve()}")
+    print(f"Rapport généré avec {len(history)} jour(s) d'historique : {report_path}")
 
 
 if __name__ == "__main__":
